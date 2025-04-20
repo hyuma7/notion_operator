@@ -1,0 +1,6 @@
+notionのSDKとpythonを使用
+クラウドはGcloudを使用
+cloud functions
+
+以下機能一覧である
+自分自身のQR ブロック追加
