@@ -1,0 +1,2 @@
+# notion_operator
+notionのAPIとpythonを使用して色々なことを実現するためのリポジトリです。
