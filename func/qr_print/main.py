@@ -4,12 +4,14 @@ import functions_framework
 from notion_client import Client
 from flask import jsonify, Request
 import urllib.parse
+from common.notion_auth import NotionAuth
 
 # 環境変数の設定
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 
-# Notionクライアントの初期化
-notion = Client(auth=NOTION_API_KEY)
+# Notion認証の初期化
+notion_auth = NotionAuth()
+notion = notion_auth.get_client()
 
 def generate_quickchart_qr_url(data: str, size: int = 300) -> str:
     """
@@ -133,6 +135,14 @@ def add_qr_code(request: Request):
     }
     """
     try:
+        # トークンの検証
+        if not notion_auth.verify_token():
+            return jsonify({"error": "無効なNotion APIトークンです"}), 401
+        
+        # ワークスペース情報の取得（ログ用）
+        workspace_info = notion_auth.get_workspace_info()
+        print(f"ワークスペース情報: {workspace_info}")
+        
         # リクエストデータの取得
         request_data = request.get_json(silent=True)
         if not request_data:

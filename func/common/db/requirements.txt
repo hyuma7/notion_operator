@@ -1,0 +1,6 @@
+notion-client
+functions-framework
+flask
+pydantic-notion
+pydantic>=2.0.0
+python-dotenv
