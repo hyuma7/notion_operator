@@ -6,18 +6,24 @@ from functools import wraps
 from flask import jsonify, Request
 
 class NotionAuth:
+    _instance = None
+    _client = None
+    
+    def __new__(cls, allowed_workspaces: Optional[List[str]] = None):
+        if cls._instance is None:
+            cls._instance = super(NotionAuth, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self, allowed_workspaces: Optional[List[str]] = None):
-        """
-        NotionAuthクラスの初期化
+        if hasattr(self, '_initialized'):
+            return
+        self._initialized = True
         
-        Args:
-            allowed_workspaces: 許可されたワークスペースIDのリスト。Noneの場合は環境変数から取得
-        """
         self.api_key = os.environ.get("NOTION_API_KEY")
         if not self.api_key:
             raise ValueError("NOTION_API_KEY environment variable is not set")
         
-        self.client = Client(auth=self.api_key)
+        self._client = Client(auth=self.api_key)
         
         # 許可されたワークスペースの設定
         if allowed_workspaces is None:
@@ -35,7 +41,7 @@ class NotionAuth:
         """
         try:
             # トークンの検証と情報取得
-            response = self.client.users.me()
+            response = self._client.users.me()
             # Notion APIレスポンスの構造に合わせて修正
             # ワークスペースIDは実際のレスポンス構造で確認する必要あり
             bot_info = response.get("bot", {})
@@ -58,7 +64,7 @@ class NotionAuth:
         """
         try:
             # トークンの検証（APIリクエストを実行）
-            self.client.users.me()
+            self._client.users.me()
             return True
         except Exception:
             return False
@@ -92,7 +98,7 @@ class NotionAuth:
         Returns:
             Client: Notionクライアントのインスタンス
         """
-        return self.client
+        return self._client
 
 def require_notion_auth(f):
     """
