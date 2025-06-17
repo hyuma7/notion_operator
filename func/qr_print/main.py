@@ -1,157 +1,266 @@
 import os
 import json
-import functions_framework
-from notion_client import Client
-from flask import jsonify, Request
-import urllib.parse
+import logging
+import socket
+import time
+from datetime import datetime
+from contextlib import contextmanager
+from typing import Dict, Any, Optional, List
 
-# 環境変数の設定
+import functions_framework
+from flask import jsonify, Request
+from notion_client import Client
+from PIL import Image, ImageDraw, ImageFont
+import qrcode
+from brother_ql import BrotherQLRaster, create_label
+from brother_ql.backends import backend_factory
+
+# ロギング設定
+logging.basicConfig(level=logging.INFO)
+
+# 環境変数
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
+PRINTER_IP = os.environ.get('PRINTER_IP', '192.168.1.100')
+PRINTER_MODEL = os.environ.get('PRINTER_MODEL', 'QL-820NWB')
+LABEL_SIZE = os.environ.get('LABEL_SIZE', '62x29')
 
 # Notionクライアントの初期化
 notion = Client(auth=NOTION_API_KEY)
 
-def generate_quickchart_qr_url(data: str, size: int = 300) -> str:
-    """
-    QuickChart APIを使用してQRコードのURLを生成する
-    
-    Args:
-        data: QRコードに埋め込むデータ（URL等）
-        size: QRコードの大きさ（ピクセル）
-        
-    Returns:
-        QuickChart QR APIのURL
-    """
-    # URLエンコードしてQuickChart APIのURLを生成
-    encoded_data = urllib.parse.quote(data)
-    qr_url = f"https://quickchart.io/qr?text={encoded_data}&size={size}"
-    
-    return qr_url
+class PrinterError(Exception):
+    pass
 
-def get_page_id_from_url(url: str) -> str:
-    """
-    NotionページのURLからページIDを抽出する
-    
-    Args:
-        url: NotionページのURL
-        
-    Returns:
-        ページID
-    """
-    # URLの最後の部分を取得（クエリパラメータを除く）
-    if '?' in url:
-        url = url.split('?')[0]
-    
-    # 最後のスラッシュ以降を取得
-    page_id = url.split('/')[-1]
-    
-    # ハイフンが含まれていない場合はそのまま返す
-    if '-' not in page_id:
-        return page_id
-    
-    # ハイフンを含む場合は、正しいフォーマットに変換
-    page_id = page_id.replace('-', '')
-    
-    return page_id
+@contextmanager
+def printer_connection_test(printer_ip: str, port: int = 9100, timeout: int = 10):
+    """プリンター接続をテスト"""
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((printer_ip, port))
+        yield sock
+    except socket.timeout:
+        raise PrinterError(f"{printer_ip}:{port}への接続タイムアウト")
+    except socket.error as e:
+        raise PrinterError(f"プリンターに到達できません: {e}")
+    finally:
+        if sock:
+            sock.close()
 
-def add_image_to_notion(page_id: str, image_url: str, caption: str = "") -> dict:
-    """
-    Notionページに画像ブロックを追加する
-    """
-    response = notion.blocks.children.append(
-        block_id=page_id,
-        children=[
-            {
-                "object": "block",
-                "type": "image",
-                "image": {
-                    "type": "external",
-                    "external": {
-                        "url": image_url
-                    },
-                    "caption": [
-                        {
-                            "type": "text", 
-                            "text": {"content": caption}
-                        }
-                    ]
-                }
-            }
-        ]
-    )
+def extract_notion_data(webhook_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Notionウェブフックからデータを抽出して正規化"""
     
-    return response
-
-def add_embed_to_notion(page_id: str, embed_url: str, after_block_id: str = None) -> dict:
-    """
-    Notionページに埋め込みブロックを追加する
-    
-    Args:
-        page_id: NotionページのID
-        embed_url: 埋め込むコンテンツのURL
-        after_block_id: 指定された場合、このブロックの後に埋め込む。Noneの場合はページの先頭に追加
+    # Notion自動化からのデータ形式の場合
+    if "data" in webhook_data and isinstance(webhook_data["data"], dict):
+        notion_data = webhook_data["data"]
+        properties = notion_data.get("properties", {})
         
-    Returns:
-        Notion APIのレスポンス
-    """
-    append_params = {
-        "block_id": page_id,
-        "children": [
-            {
-                "object": "block",
-                "type": "embed",
-                "embed": {
-                    "url": embed_url
-                }
-            }
-        ]
+        # ページ情報を抽出
+        page_id = notion_data.get("id", "")
+        page_url = notion_data.get("url") or notion_data.get("public_url") or ""
+        
+        # タイトルを取得（複数の形式に対応）
+        title = ""
+        if page_url:
+            # URLからタイトルを抽出
+            title = page_url.split("/")[-1].replace("-", " ")
+            # ページIDを除去
+            if len(title) > 32 and title[-32:].replace(" ", "").isalnum():
+                title = title[:-33]
+        
+        # アイコンの取得
+        icon = ""
+        if "icon" in notion_data and notion_data["icon"]:
+            if notion_data["icon"]["type"] == "emoji":
+                icon = notion_data["icon"].get("emoji", "")
+        
+        # カテゴリーやその他のプロパティを取得
+        category = ""
+        date = datetime.utcnow().strftime("%Y-%m-%d")
+        
+        # プロパティから追加情報を取得（あれば）
+        for prop_name, prop_data in properties.items():
+            if isinstance(prop_data, dict):
+                if "select" in prop_data and prop_data["select"]:
+                    category = prop_data["select"].get("name", "")
+                elif "date" in prop_data and prop_data["date"]:
+                    date = prop_data["date"].get("start", date)
+        
+        return {
+            'name': f"{icon} {title}".strip() if icon else title,
+            'id': page_id[:8] if page_id else "NO_ID",
+            'category': category or "未分類",
+            'date': date,
+            'page_id': page_id,
+            'page_url': page_url
+        }
+    
+    # 従来の形式
+    return {
+        'name': webhook_data.get('name', 'アイテム'),
+        'id': webhook_data.get('id', 'NO_ID'),
+        'category': webhook_data.get('category', '未分類'),
+        'date': webhook_data.get('date', datetime.utcnow().strftime("%Y-%m-%d")),
+        'page_id': webhook_data.get('page_id', ''),
+        'page_url': webhook_data.get('page_url', '')
     }
+
+def create_notion_label(qr_data: Dict[str, Any], title: str, details: List[str]) -> Image.Image:
+    """Notionアイテム専用のラベルを作成"""
     
-    # 特定のブロックの後に追加する場合
-    if after_block_id:
-        append_params["after"] = after_block_id
+    # ラベルサイズに応じた寸法を設定
+    if LABEL_SIZE == '62x29':
+        width_px, height_px = 696, 271
+    elif LABEL_SIZE == '62x100':
+        width_px, height_px = 696, 1109
+    else:
+        # デフォルトは50mm高さの連続62mm
+        width_px = 696
+        height_px = int(50 * 300 / 25.4)
     
-    response = notion.blocks.children.append(**append_params)
+    # 白い背景でラベルを作成
+    label = Image.new('RGB', (width_px, height_px), 'white')
+    draw = ImageDraw.Draw(label)
     
-    return response
+    # QRコードを生成
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(json.dumps(qr_data))
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="black", back_color="white")
+    
+    # レイアウトとフォント設定
+    if LABEL_SIZE == '62x29':
+        # 横並びレイアウト（左にQR、右にテキスト）
+        qr_size = height_px - 40
+        try:
+            qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+        except AttributeError:
+            qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+        label.paste(qr_img, (20, 20))
+        
+        text_x = qr_size + 40
+        text_y = 30
+        
+        # コンパクトなフォントサイズ
+        font_sizes = {'title': 20, 'details': 14}
+    else:
+        # 縦レイアウト（上にQR、下にテキスト）
+        qr_size = min(width_px - 40, int(height_px * 0.5))
+        try:
+            qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+        except AttributeError:
+            qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+        qr_x = (width_px - qr_size) // 2
+        label.paste(qr_img, (qr_x, 20))
+        
+        text_x = 20
+        text_y = qr_size + 40
+        
+        font_sizes = {'title': 24, 'details': 18}
+    
+    # フォントを設定（日本語対応）
+    try:
+        font_path = os.path.join(os.path.dirname(__file__), '..', 'add_qr_info_code', 'fonts', 'NotoSansJP-Regular.otf')
+        if os.path.exists(font_path):
+            font_title = ImageFont.truetype(font_path, font_sizes['title'])
+            font_details = ImageFont.truetype(font_path, font_sizes['details'])
+        else:
+            raise FileNotFoundError("Font file not found")
+    except:
+        try:
+            font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", font_sizes['title'])
+            font_details = ImageFont.truetype("DejaVuSans.ttf", font_sizes['details'])
+        except:
+            font_title = ImageFont.load_default()
+            font_details = ImageFont.load_default()
+    
+    # タイトルを描画
+    draw.text((text_x, text_y), title[:30], fill='black', font=font_title)
+    
+    # 詳細を描画
+    detail_y = text_y + 30
+    for detail in details:
+        if detail and detail_y < height_px - 20:
+            draw.text((text_x, detail_y), detail[:40], fill='black', font=font_details)
+            detail_y += 22
+    
+    return label
+
+def print_label_to_brother(label_image: Image.Image, printer_ip: str, label_size: str = '62', max_retries: int = 3) -> Dict[str, Any]:
+    """
+    リトライロジック付きでBrother QL-820NWBにラベルを印刷
+    
+    戻り値:
+        dict: {'success': bool, 'message': str}
+    """
+    printer_identifier = f"tcp://{printer_ip}:9100"
+    model = PRINTER_MODEL
+    
+    # 接続テスト
+    try:
+        with printer_connection_test(printer_ip):
+            logging.info(f"プリンター {printer_ip} に到達可能")
+    except PrinterError as e:
+        return {'success': False, 'message': str(e)}
+    
+    # 印刷指示を作成
+    try:
+        qlr = BrotherQLRaster(model)
+        instructions = create_label(
+            qlr, 
+            label_image, 
+            label_size=label_size,
+            cut=True,
+            compress=True,
+            red=False
+        )
+    except Exception as e:
+        return {'success': False, 'message': f"ラベル作成エラー: {e}"}
+    
+    # リトライ付きで印刷
+    for attempt in range(max_retries):
+        try:
+            backend = backend_factory('network')
+            send_function = backend['writer']
+            send_function(instructions, printer_identifier)
+            
+            logging.info(f"試行 {attempt + 1} で印刷成功")
+            return {'success': True, 'message': 'ラベルが正常に印刷されました'}
+            
+        except Exception as e:
+            logging.warning(f"印刷試行 {attempt + 1} 失敗: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                return {'success': False, 'message': f"{max_retries}回の試行後に印刷失敗: {e}"}
 
 @functions_framework.http
-def add_qr_code(request: Request):
+def process_notion_webhook(request: Request):
     """
-    HTTP関数のエントリポイント
-    Notionからのデータを受け取り、QRコードを生成してNotionに追加する
-    
-    Notionの自動化からのリクエスト形式（例）:
-    "{'source': {'type': 'automation', 'automation_id': '1db54e62-06d8-8041-822e-004d9b756239', 'action_id': '1db54e62-06d8-8074-9ae0-005a86ede7b8', 'event_id': '2d2145c9-2250-4444-be4f-f5fd642bca87', 'user_id': '5159ce3b-3cda-483d-a478-3c2761b798eb', 'attempt': 1}, 'data': {'object': 'page', 'id': '1d454e62-06d8-81db-b701-e93ee8c9f847', 'created_time': '2025-04-13T15:09:00.000Z', 'last_edited_time': '2025-04-20T09:19:00.000Z', 'created_by': {'object': 'user', 'id': '88bff1e4-f3db-403e-8090-30961a19301e'}, 'last_edited_by': {'object': 'user', 'id': '5159ce3b-3cda-483d-a478-3c2761b798eb'}, 'cover': {'type': 'file', 'file': {'url': 'https://prod-files-secure.s3.us-west-2.amazonaws.com/43beaec1-d675-4f67-a0b4-026dcf71b4e5/564cc933-14bc-48be-8778-252cd34fb2ef/%E3%82%B9%E3%82%AF%E3%83%AA%E3%83%BC%E3%83%B3%E3%82%B7%E3%83%A7%E3%83%83%E3%83%88_2025-04-18_000907.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466RMZRLOKI%2F20250420%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20250420T093848Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEBYaCXVzLXdlc3QtMiJGMEQCIH1B%2BedmtDVPUwJswsuuvxHfxejD5Z%2Fp8Wnp87hlEhOMAiB2wMcJcui63%2B%2F5gOO3JHF9UUcKlJd%2BSkjKP27q8ThOsyqGBAif%2F%2F%2F%2F%2F%2F%2F%2F%2F%2F8BEAAaDDYzNzQyMzE4MzgwNSIM1figxhwlVbKa5H0eKtoD7QFK%2F9DXfQS7dmW2%2FCv1Oct0Gz6IJ426sowNEJgVgclRQRzMSg%2FZsauzCMwji%2FcgOaV8BYRVaFJSAqUe1C1dVK8lmCAkn7Dzu%2BguzYtR6yOlAnDkXCY0gxTGZWAdOw05oauXwYl24JrdRFoDhZBUGLHI0%2BmSnicEgIkrf0FUtWjSqD3ZKOSj3JnQw08UOjupGmylhQ80sVQgOv1a90Sos9I1G2krMegLxKTCXj9wZw01OxT8XRFVmzmL0f0jKwa7ZoFzJKCSd2RJKlPtE5bx1hrq926rgNpcmqN4gtwSGzjettdWwDWD0kJFpAEn4vislfmNTu6Nq5X%2FreGp9M8r7%2FliWUeMVlzHLo%2Fxf8DH7Ha%2BZH4zkEjENyW%2BtuDDbGP6fxiiYG5VqZ3h97i6otnEqCJ2vzLY4JhB8UMNTOAUp36BDVLQ9WjXEr8JDJxMo4spfgkcbjrE2gitBJbgGAjmneQyyhmbbfiN0kzCtN3pKwHL%2FfuS65KsaXA9LveQNDskGqGG%2BxZdInZ0juR4MfCci4P74Xr%2BA2%2BrYeWG6aWu%2B9cZi8yCtRdQ%2F5IOAciyMBOJEkWte3DvSLKwODb5WNGuKwYU0i1OvMLmf9MGXci31oAmzt6A9thvPf3YMLugksAGOqYBbSFNhGvMYbgOB6Wg8BkxeNsXL1W1H0ix9jA0jHulWZbbwJd9Ws4GM0LR53cRcaxJwX7BLS6syovt0De0xnCEPbuCjBfyqHVCQ%2F9CbxjscadnHl3R0pEpI97iy5Iu8j%2Fky%2BeHGcxHpPuyoL7Ocon75zZp9hQuO9XxjNCfXz1vLyIHnuRauoWGIHtXBfeDmvThX2FnniM%2FjYQOLrjbDsSfioadeIzNpg%3D%3D&X-Amz-Signature=58d90e3cd6859725d3e7a71cb2356873c32848bc8f502b95a5c78b625f4da839&X-Amz-SignedHeaders=host&x-id=GetObject', 'expiry_time': '2025-04-20T10:38:48.709Z'}}, 'icon': {'type': 'emoji', 'emoji': '🪦'}, 'parent': {'type': 'database_id', 'database_id': '1d254e62-06d8-81bb-9e88-d2e7ffb90444'}, 'archived': False, 'in_trash': False, 'properties': {}, 'url': 'https://www.notion.so/Nintendo-Switch-1d454e6206d881dbb701e93ee8c9f847', 'public_url': None, 'request_id': '84e27705-7664-4fe0-9d76-010b37c2b298'}}"
-    
-    または従来の形式:
-    {
-        "page_id": "Notionページのユニークな識別子（オプション）", 
-        "page_url": "NotionページのURL（オプション、page_idが指定されていない場合に使用）",
-        "data": "QRコードに埋め込むデータ",
-        "size": "QRコードのサイズ（ピクセル、オプション）"
-    }
+    Notionウェブフックを処理してラベルを印刷
     """
     try:
         # リクエストデータの取得
         request_data = request.get_json(silent=True)
         if not request_data:
-            # JSONとして解析できない場合は、文字列として受け取る
             request_data = request.data.decode('utf-8')
         
-        print(f"受信データ: {request_data}")
+        logging.info(f"受信データ: {request_data}")
         
-        # リクエストデータの検証
+        # データの検証
         if not request_data:
             return jsonify({"error": "リクエストデータが必要です"}), 400
         
         # 文字列の場合はJSONに変換
         if isinstance(request_data, str):
             try:
-                # シングルクォートをダブルクォートに置換してJSON解析
-                # 単純な置換では解析できない場合があるため、astモジュールを使用する方法も試みる
+                # シングルクォートをダブルクォートに置換
                 try:
-                    # まず通常の方法で試す
                     cleaned_data = request_data.replace("'", '"')
                     request_data = json.loads(cleaned_data)
                 except json.JSONDecodeError:
@@ -159,79 +268,61 @@ def add_qr_code(request: Request):
                     import ast
                     request_data = ast.literal_eval(request_data)
             except Exception as e:
-                print(f"JSON解析エラー: {e}")
+                logging.error(f"JSON解析エラー: {e}")
                 return jsonify({"error": f"JSONの解析に失敗しました: {e}"}), 400
         
-        print(f"解析後のデータ: {request_data}")
+        logging.info(f"解析後のデータ: {request_data}")
         
-        # Notionの自動化からのリクエスト形式かどうかを確認
-        if isinstance(request_data, dict) and "data" in request_data and isinstance(request_data["data"], dict):
-            # Notionの自動化からのリクエスト
-            notion_data = request_data["data"]
-            page_id = notion_data.get("id")
-            
-            if not page_id:
-                return jsonify({"error": "ページIDが見つかりません"}), 400
-            
-            # URLの取得
-            page_url = notion_data.get("url") or notion_data.get("public_url") or ""
-            
-            # 送信元ブロックの情報（あれば）
-            # 注意: 提供されたサンプルJSONには送信元ブロックIDのフィールドはない
-            source_block_id = None
-            # sourceオブジェクト内にblock_idがあれば取得
-            if isinstance(request_data.get("source"), dict):
-                source_block_id = request_data["source"].get("block_id")
-            
-            # QRコードに埋め込むデータ（ページURL）
-            # URLがあればそれを使用、なければページIDをそのまま使用
-            qr_data = page_url if page_url else f"https://www.notion.so/{page_id}"
-            
-            # QRコードのURL生成
-            qr_url = generate_quickchart_qr_url(qr_data, 300)
-            
-            print(f"ページID: {page_id}, QRデータ: {qr_data}")
-            print(f"生成したQR URL: {qr_url}")
-            
-            # Notionページに埋め込みブロックとして追加
-            response = add_embed_to_notion(page_id, qr_url, source_block_id)
+        # Notionデータを抽出
+        label_data = extract_notion_data(request_data)
+        
+        # QRコードデータを生成
+        qr_data = {
+            'id': label_data['id'],
+            'name': label_data['name'],
+            'timestamp': datetime.utcnow().isoformat(),
+            'page_id': label_data['page_id'],
+            'page_url': label_data['page_url']
+        }
+        
+        # ラベルを作成
+        label_image = create_notion_label(
+            qr_data=qr_data,
+            title=label_data['name'],
+            details=[
+                f"ID: {label_data['id']}",
+                f"カテゴリ: {label_data['category']}",
+                f"日付: {label_data['date']}"
+            ]
+        )
+        
+        # ラベルを印刷
+        result = print_label_to_brother(label_image, PRINTER_IP, LABEL_SIZE)
+        
+        if result['success']:
+            return jsonify({
+                "status": "success",
+                "message": result['message'],
+                "label_id": label_data['id'],
+                "printed_data": {
+                    "title": label_data['name'],
+                    "id": label_data['id'],
+                    "category": label_data['category'],
+                    "date": label_data['date']
+                }
+            }), 200
         else:
-            # 従来の形式
-            page_id = request_data.get("page_id")
-            page_url = request_data.get("page_url")
+            return jsonify({
+                "status": "error",
+                "message": result['message']
+            }), 500
             
-            if not page_id and not page_url:
-                return jsonify({"error": "page_idまたはpage_urlのいずれかを指定してください"}), 400
-            
-            # URLからページIDを抽出
-            if not page_id and page_url:
-                page_id = get_page_id_from_url(page_url)
-            
-            data = request_data.get("data")
-            size = request_data.get("size", 300)
-            
-            if not data:
-                return jsonify({"error": "dataは必須フィールドです"}), 400
-            
-            # QuickChart APIでQRコードURLを生成
-            qr_url = generate_quickchart_qr_url(data, size)
-            
-            # Notionページに追加
-            response = add_embed_to_notion(page_id, qr_url)
-        
-        return jsonify({
-            "success": True,
-            "message": "QRコードが正常に追加されました",
-            "qr_url": qr_url,
-            "page_id": page_id,
-            "notion_response": response
-        })
-        
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        print(f"エラー: {error_details}")
+        logging.error(f"ウェブフック処理エラー: {str(e)}", exc_info=True)
         return jsonify({
-            "error": str(e),
-            "details": error_details
+            "status": "error",
+            "message": str(e)
         }), 500
+
+# エイリアス（後方互換性のため）
+add_qr_code = process_notion_webhook

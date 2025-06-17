@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QRラベル - テスト機器 ABC-123</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
+            background: #f0f0f0;
+        }
+        .label-container {
+            width: 234.35999999999999px;  /* mm to px conversion (300dpi) */
+            height: 109.61999999999999px;
+            background: white;
+            border: 2px solid #333;
+            margin: 20px auto;
+            display: flex;
+            padding: 10px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .qr-section {
+            width: 150px;
+            height: 150px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            position: relative;
+        }
+        .qr-placeholder {
+            width: 100%;
+            height: 100%;
+            border: 2px solid #666;
+            background: #f8f8f8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            cursor: pointer;
+        }
+        .qr-pattern {
+            width: 80%;
+            height: 80%;
+            background-image: 
+                linear-gradient(90deg, #333 50%, transparent 50%),
+                linear-gradient(#333 50%, transparent 50%);
+            background-size: 8px 8px;
+            opacity: 0.7;
+        }
+        .qr-data-tooltip {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: #333;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 10px;
+            width: 300px;
+            z-index: 100;
+            display: none;
+        }
+        .qr-placeholder:hover .qr-data-tooltip {
+            display: block;
+        }
+        .info-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+            line-height: 1.2;
+        }
+        .field-row {
+            margin: 5px 0;
+            font-size: 18px;
+            line-height: 1.3;
+        }
+        .field-label {
+            font-weight: bold;
+            color: #555;
+        }
+        .field-value {
+            color: #333;
+        }
+        .timestamp {
+            font-size: 10px;
+            color: #888;
+            margin-top: auto;
+            padding-top: 8px;
+        }
+        .preview-info {
+            text-align: center;
+            margin: 20px 0;
+            padding: 15px;
+            background: #e8f4f8;
+            border-radius: 8px;
+            border-left: 4px solid #2196F3;
+        }
+        .print-info {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px auto;
+            max-width: 600px;
+        }
+        .command-box {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        .size-indicator {
+            position: absolute;
+            top: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .label-container {
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-info">
+        <h2>📋 QRラベル プレビュー</h2>
+        <p>実際の印刷サイズ: <strong>62mm × 29mm</strong></p>
+        <p>QRコードにマウスを重ねるとデータが表示されます</p>
+    </div>
+    
+    <div class="label-container">
+        <div class="size-indicator">62x29mm</div>
+        <div class="qr-section">
+            
+        <div class="qr-placeholder">
+            <div class="qr-pattern"></div>
+            <div class="qr-data-tooltip">
+                <pre>{
+  "id": "12345678-1234-1234-1234-123456789012",
+  "title": "テスト機器 ABC-123",
+  "category": "電子機器",
+  "date": "2025-01-17",
+  "url": "https://www.notion.so/Test-Page-123456789012"
+}</pre>
+            </div>
+        </div>
+        
+        </div>
+        <div class="info-section">
+            <div class="title">🔧 テスト機器 ABC-123</div>
+            <div class="field-row"><span class="field-label">📂 カテゴリ:</span> <span class="field-value">電子機器</span></div><div class="field-row"><span class="field-label">📅 日付:</span> <span class="field-value">2025-01-17</span></div><div class="field-row"><span class="field-label">📄 Location:</span> <span class="field-value">研究室A-101</span></div><div class="field-row"><span class="field-label">📄 SerialNumber:</span> <span class="field-value">SN-2025-0001</span></div><div class="field-row"><span class="field-label">📄 Price:</span> <span class="field-value">298000</span></div><div class="field-row"><span class="field-label">🆔 ID:</span> <span class="field-value">12345678-1234-1234-1234-123456789012</span></div>
+            <div class="timestamp">印刷: 2025-06-18 03:23</div>
+        </div>
+    </div>
+    
+    <div class="print-info">
+        <h3>🖨️ 印刷方法</h3>
+        <p><strong>Brother QLプリンターの場合:</strong></p>
+        <div class="command-box">brother_ql -b network -m QL-820NWB -p tcp://192.168.1.100:9100 print -l 62 image.png</div>
+        
+        <p><strong>実際の画像を生成するには:</strong></p>
+        <div class="command-box">pip install pillow qrcode[pil]</div>
+        <p>ライブラリをインストール後、notion_qr_image.py を使用してください。</p>
+        
+        <p><strong>ページ情報:</strong></p>
+        <ul>
+            <li>Notion URL: <a href="https://www.notion.so/Test-Page-123456789012" target="_blank">https://www.notion.so/Test-Page-123456789012</a></li>
+            <li>ページID: 12345678-1234-1234-1234-123456789012</li>
+            <li>生成日時: 2025年06月18日 03:23:44</li>
+        </ul>
+    </div>
+    
+    <script>
+        console.log('QRコードデータ:', {
+  "page_id": "12345678-1234-1234-1234-123456789012",
+  "url": "https://www.notion.so/Test-Page-123456789012",
+  "icon": "🔧",
+  "title": "テスト機器 ABC-123",
+  "category": "電子機器",
+  "date": "2025-01-17",
+  "status": "使用中",
+  "tags": [],
+  "custom_fields": {
+    "Location": "研究室A-101",
+    "SerialNumber": "SN-2025-0001",
+    "Price": 298000
+  }
+});
+    </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+functions-framework==3.0.0
+notion-client==1.0.0
+python-dotenv==1.0.0 
+functions-framework==3.*
+Flask==3.*
+notion-client==2.*
+Pillow<10.0.0
+google-cloud-storage==2.*
+qrcode[pil]==7.*
+Werkzeug>=2.2,<3.0
