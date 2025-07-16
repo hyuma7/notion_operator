@@ -4,6 +4,9 @@ import io
 import time
 import datetime as dt
 from urllib.parse import urlencode
+import base64
+import struct
+import requests
 
 import functions_framework
 from flask import jsonify, Request
@@ -14,7 +17,8 @@ import qrcode
 
 # ── 環境変数 ───────────────────────────────────
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
-GCS_BUCKET     = os.environ.get("GCS_BUCKET")      # 必須
+GCS_BUCKET     = os.environ.get("GCS_BUCKET")
+PRINTER_PROXY_URL = os.environ.get("PRINTER_PROXY_URL")  # プリンタープロキシのURL
 
 # ── Notion クライアント ────────────────────────
 notion = Client(auth=NOTION_API_KEY)
@@ -59,50 +63,136 @@ def create_qr_code(data: str, size: int = 200) -> Image.Image:
     qr_img = qr.make_image(fill_color="black", back_color="white")
     return qr_img.resize((size, size))
 
-# ── ラベル生成 ──────────────────────────────────
-def create_product_label_with_qr(
+# ── ラベル生成（Brother QL対応） ──────────────────
+def create_product_label_for_brother(
     product_info: dict,
     page_url: str,
-    width: int = 800,
-    height: int = 400,
-) -> io.BytesIO:
+    label_size: str = "62x29"
+) -> Image.Image:
+    """
+    Brother QLプリンター用のラベル画像を生成
+    label_size: "62x29" or "62x100"
+    """
+    # Brother QLの解像度に合わせたサイズ設定
+    if label_size == "62x29":
+        width, height = 696, 271  # 62mm x 29mm at 300dpi
+    else:
+        width, height = 696, 1109  # 62mm x 100mm at 300dpi
+    
     img = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(img)
 
-    # フォント
+    # フォントサイズを調整
     try:
-        title_font  = load_font(36, bold=True)
-        normal_font = load_font(24)
+        if label_size == "62x29":
+            title_font  = load_font(24, bold=True)
+            normal_font = load_font(16)
+            qr_size = 150
+        else:
+            title_font  = load_font(36, bold=True)
+            normal_font = load_font(24)
+            qr_size = 200
     except Exception as e:
         print("FONT WARNING:", e)
         title_font = normal_font = ImageFont.load_default()
+        qr_size = 150
 
+    # レイアウト調整
+    margin = 10
+    y_start = margin
+    
     # タイトル
-    draw.text((20, 20), "【商品情報】", font=title_font, fill="black")
+    draw.text((margin, y_start), "【商品情報】", font=title_font, fill="black")
+    y = y_start + 40
 
-    # 表示対象プロパティのみ
-    y = 80
+    # QRコードを右側に配置
+    qr_img = create_qr_code(page_url, qr_size)
+    qr_x = width - qr_img.width - margin
+    qr_y = y
+    img.paste(qr_img, (qr_x, qr_y))
+
+    # テキスト情報を左側に配置
+    text_width = qr_x - margin * 2
     for key in DISPLAY_PROPERTIES:
         if key in product_info:
-            draw.text((40, y), f"{key}: {product_info[key]}", font=normal_font, fill="black")
-            y += 40
+            text = f"{key}: {product_info[key]}"
+            # テキストが長い場合は折り返す
+            if draw.textlength(text, font=normal_font) > text_width:
+                # 簡易的な折り返し処理
+                value = str(product_info[key])
+                draw.text((margin, y), f"{key}:", font=normal_font, fill="black")
+                y += 25
+                draw.text((margin + 20, y), value[:20], font=normal_font, fill="black")
+                if len(value) > 20:
+                    y += 25
+                    draw.text((margin + 20, y), value[20:40], font=normal_font, fill="black")
+            else:
+                draw.text((margin, y), text, font=normal_font, fill="black")
+            y += 30
 
-    # QR
-    qr_img = create_qr_code(page_url)
-    qr_pos = (width - qr_img.width - 40, 80)
-    img.paste(qr_img, qr_pos)
+    # 日時を追加
+    now = dt.datetime.now().strftime("%Y/%m/%d %H:%M")
+    draw.text((margin, height - 30), f"印刷日時: {now}", font=normal_font, fill="gray")
 
-    # キャプション
-    draw.text((qr_pos[0], qr_pos[1] + qr_img.height + 10),
-              "製品ページへアクセス", font=normal_font, fill="black")
+    return img
 
-    # 枠
-    draw.rectangle([(10, 10), (width - 10, height - 10)], outline="black", width=2)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+# ── Brother QLフォーマット変換 ─────────────────
+def convert_to_brother_format(image: Image.Image, label_size: str = "62x29") -> bytes:
+    """
+    画像をBrother QLプリンター形式に変換
+    """
+    ESC = b'\x1b'
+    data = b''
+    
+    # 初期化
+    data += ESC + b'@'
+    
+    # ラスターモード
+    data += ESC + b'ia\x01'
+    
+    # 印刷情報（62mmラベル用）
+    if label_size == "62x29":
+        # 29mmラベル
+        data += ESC + b'iz' + bytes([0x80, 0x00, 0x1d, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    else:
+        # 100mmラベル
+        data += ESC + b'iz' + bytes([0x80, 0x00, 0x64, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    
+    # メディア情報
+    data += ESC + b'iS' + bytes([0x0e, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    
+    # マージン
+    data += ESC + b'id\x00\x00'
+    
+    # 圧縮モード
+    data += b'M\x02'
+    
+    # 画像を1ビットに変換
+    if image.mode != '1':
+        image = image.convert('1')
+    
+    # ラスターデータ（パックビット圧縮）
+    for y in range(image.height):
+        line_data = bytearray()
+        for x in range(0, image.width, 8):
+            byte = 0
+            for bit in range(8):
+                if x + bit < image.width:
+                    if image.getpixel((x + bit, y)) == 0:
+                        byte |= (1 << (7 - bit))
+            line_data.append(byte)
+        
+        # ラスターグラフィックス転送
+        data += b'g\x00' + struct.pack('<H', len(line_data)) + bytes(line_data)
+    
+    # 印刷コマンド
+    data += b'\x1a'
+    
+    # フィード（カット位置まで）
+    if '29' in label_size:
+        data += b'\x0c'
+    
+    return data
 
 # ── GCS アップロード ───────────────────────────
 def upload_image_to_cloud_storage(image_data: io.BytesIO, destination_path: str | None = None) -> str:
@@ -124,6 +214,22 @@ def upload_image_to_cloud_storage(image_data: io.BytesIO, destination_path: str 
     blob.make_public()
 
     return blob.public_url
+
+# ── プリンターへの送信 ──────────────────────────
+def send_to_printer(raster_data: bytes, printer_url: str) -> dict:
+    """
+    Brother QLプリンタープロキシサーバーにデータを送信
+    """
+    try:
+        response = requests.post(
+            f"{printer_url}/print/raw",
+            data=raster_data,
+            headers={"Content-Type": "application/octet-stream"},
+            timeout=30
+        )
+        return response.json()
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # ── Notion 画像追加 ────────────────────────────
 def add_image_to_notion(page_id: str, image_url: str, caption: str = "") -> dict:
@@ -183,6 +289,11 @@ def handle_create_product_label(request: Request):
 
         print("RAW:", req_json)
 
+        # オプションパラメータ
+        label_size = req_json.get("label_size", "62x29")
+        print_directly = req_json.get("print_directly", False)
+        save_to_notion = req_json.get("save_to_notion", True)
+
         # ----- パターン 1: Notion Webhook -----
         if isinstance(req_json, dict) and "source" in req_json and "data" in req_json:
             page_id  = req_json["data"].get("id")
@@ -202,23 +313,43 @@ def handle_create_product_label(request: Request):
         if not all([page_id, page_url, product]):
             return jsonify({"error": "page_id / page_url / product_info が不足"}), 400
 
-        # ラベル生成
-        img_data = create_product_label_with_qr(product, page_url)
+        # Brother QL用ラベル生成
+        label_img = create_product_label_for_brother(product, page_url, label_size)
 
-        # アップロード
-        file_name = f"qr_codes/{page_id}_{int(time.time())}.png"
-        image_url = upload_image_to_cloud_storage(img_data, file_name)
-
-        # Notion に追加
-        caption = "商品情報ラベル（QR＋自動生成）"
-        notion_res = add_image_to_notion(page_id, image_url, caption)
-
-        return jsonify({
+        response_data = {
             "success": True,
-            "image_url": image_url,
             "page_id": page_id,
-            "notion_response": notion_res
-        })
+            "label_size": label_size
+        }
+
+        # GCSに保存（Notion表示用）
+        if save_to_notion:
+            img_buf = io.BytesIO()
+            label_img.save(img_buf, format="PNG")
+            img_buf.seek(0)
+            
+            file_name = f"qr_codes/{page_id}_{int(time.time())}.png"
+            image_url = upload_image_to_cloud_storage(img_buf, file_name)
+            response_data["image_url"] = image_url
+
+            # Notion に追加
+            caption = f"商品情報ラベル（{label_size}mm）"
+            notion_res = add_image_to_notion(page_id, image_url, caption)
+            response_data["notion_response"] = notion_res
+
+        # プリンターに直接送信
+        if print_directly and PRINTER_PROXY_URL:
+            # Brother QLフォーマットに変換
+            raster_data = convert_to_brother_format(label_img, label_size)
+            
+            # プリンタープロキシに送信
+            print_result = send_to_printer(raster_data, PRINTER_PROXY_URL)
+            response_data["print_result"] = print_result
+            
+            if print_result.get("status") == "error":
+                response_data["warning"] = f"印刷エラー: {print_result.get('message')}"
+
+        return jsonify(response_data)
 
     except Exception as e:
         import traceback
@@ -226,12 +357,54 @@ def handle_create_product_label(request: Request):
         print(tb)
         return jsonify({"error": str(e), "trace": tb}), 500
 
-
-# ── Cloud Run 単体テスト用 ──────────────────────
-#   Cloud Functions では不要だが、ローカル or Cloud Run デバッグで
-#   `PORT=8080 python main.py` とすれば起動確認できる。
-if __name__ == "__main__":
-    # Cloud Functions では不要だが、ローカル実行のために target 名を指定
-    app = functions_framework.create_app(target="handle_create_product_label")
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)))
-
+# ── テスト用エンドポイント ──────────────────────
+@functions_framework.http
+def test_print_label(request: Request):
+    """
+    テスト印刷用エンドポイント
+    """
+    try:
+        req_json = request.get_json(silent=True) or {}
+        
+        # テストデータ
+        test_product = {
+            "商品名": req_json.get("product_name", "テスト商品"),
+            "型番": req_json.get("model_number", "TEST-001"),
+            "ID": req_json.get("id", "12345")
+        }
+        
+        test_url = req_json.get("url", "https://example.com/test")
+        label_size = req_json.get("label_size", "62x29")
+        
+        # ラベル生成
+        label_img = create_product_label_for_brother(test_product, test_url, label_size)
+        
+        # Brother QLフォーマットに変換
+        raster_data = convert_to_brother_format(label_img, label_size)
+        
+        # Base64エンコードして返す（デバッグ用）
+        if req_json.get("return_base64", False):
+            return jsonify({
+                "success": True,
+                "raster_data_base64": base64.b64encode(raster_data).decode('utf-8'),
+                "data_size": len(raster_data)
+            })
+        
+        # プリンターに送信
+        if PRINTER_PROXY_URL:
+            print_result = send_to_printer(raster_data, PRINTER_PROXY_URL)
+            return jsonify({
+                "success": True,
+                "print_result": print_result
+            })
+        else:
+            return jsonify({
+                "error": "PRINTER_PROXY_URL が設定されていません"
+            }), 400
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "trace": traceback.format_exc()
+        }), 500

@@ -117,8 +117,44 @@ class NotionQRLabelProcessor:
             return prop.get("email", "")
         elif prop_type == "phone_number":
             return prop.get("phone_number", "")
+        elif prop_type == "relation":
+            relation_data = prop.get("relation", [])
+            if relation_data:
+                relation_titles = []
+                for rel_obj in relation_data:
+                    rel_id = rel_obj.get("id")
+                    if rel_id:
+                        title = self._get_relation_title(rel_id)
+                        relation_titles.append(title)
+                return ", ".join(relation_titles) if relation_titles else []
+            return []
+        elif prop_type == "unique_id":
+            unique_id_data = prop.get("unique_id", {})
+            prefix = unique_id_data.get("prefix", "")
+            number = unique_id_data.get("number", "")
+            return f"{prefix}-{number}" if prefix and number else str(number)
         else:
             return str(prop)
+    
+    def _get_relation_title(self, relation_id: str) -> str:
+        """関連ページのタイトルを取得する"""
+        try:
+            if hasattr(self, 'notion') and self.notion:
+                rel_page = self.notion.pages.retrieve(page_id=relation_id)
+                rel_props = rel_page.get("properties", {})
+                
+                # タイトルプロパティを探す
+                for prop_name, prop_data in rel_props.items():
+                    if prop_data.get("type") == "title":
+                        title_array = prop_data.get("title", [])
+                        if title_array:
+                            return title_array[0].get("plain_text", "")
+                
+                return "タイトル不明"
+            else:
+                return f"関連ID: {relation_id}"
+        except Exception as e:
+            return f"関連ID: {relation_id}"
     
     def create_label_data(self, data: Dict[str, Any], display_fields: List[str] = None) -> Dict[str, Any]:
         """ラベル用データを作成"""
