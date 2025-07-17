@@ -15,5 +15,6 @@ DEFAULT_CONFIG = {
     "enable_ngrok": False,
     "label_size": "62",
     "ngrok_domain": "",
-    "ngrok_reserved_domain_id": ""
+    "ngrok_reserved_domain_id": "",
+    "secret_key": ""
 }

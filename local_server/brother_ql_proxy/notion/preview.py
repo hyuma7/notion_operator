@@ -13,28 +13,38 @@ class LabelPreviewGenerator:
     """ラベルプレビューを生成するクラス"""
     
     def __init__(self):
-        self.default_font_size = 16
-        self.title_font_size = 20
-        self.small_font_size = 12
+        pass  # Font sizes will be calculated dynamically based on the font_size parameter
     
     def generate_preview(self, printable_fields: List[Dict[str, Any]], 
                         label_size: str = "62", 
                         include_qr: bool = True,
                         qr_data: Optional[str] = None,
-                        font_size: int = 12,
-                        qr_size_scale: int = 3) -> Dict[str, Any]:
+                        font_size: int = 16,
+                        qr_size_scale: int = 3,
+                        auto_extend_height: bool = True,
+                        layout_mode: str = "vertical") -> Dict[str, Any]:
         """印刷プレビューを生成"""
         try:
-            # ラベルサイズの設定（テストスクリプトと同じサイズ）
+            # パラメータの型変換を確実に行う
+            font_size = int(font_size) if font_size is not None else 16
+            qr_size_scale = int(qr_size_scale) if qr_size_scale is not None else 3
+            # ラベルサイズの設定
+            width = 696  # 幅は固定
             if label_size in ['62x29', '62']:
-                width, height = 696, 271  # テストスクリプトと同じ
+                initial_height = 271  # 初期高さ
                 base_qr_size = 50  # ベースサイズ
             elif label_size == '62x100':
-                width, height = 696, 1109
+                initial_height = 1109
                 base_qr_size = 75  # ベースサイズ
             else:
-                width, height = 696, 271
+                initial_height = 271
                 base_qr_size = 50  # ベースサイズ
+            
+            # 動的高さ計算のための初期設定
+            if auto_extend_height:
+                height = self._calculate_required_height(printable_fields, width, font_size, base_qr_size, qr_size_scale, initial_height, include_qr, layout_mode)
+            else:
+                height = initial_height
             
             # QRコードサイズをスケールに基づいて計算
             qr_size = base_qr_size * qr_size_scale
@@ -102,39 +112,20 @@ class LabelPreviewGenerator:
                 qr_y = (height - qr_size) // 2
                 img.paste(qr_img, (qr_x, qr_y))
             
-            # テキスト描画エリアの計算
-            text_width = width - qr_width - 20  # 左マージン10 + QRコードとの間隔10
-            text_x = 10
-            current_y = 10
-            
-            # フィールドの描画
-            for i, field in enumerate(printable_fields):
-                field_name = field.get('name', '')
-                field_value = field.get('value', '')
-                field_type = field.get('type', '')
-                
-                # すべてのフィールドは通常フォントで表示（タイトルは除外済み）
-                font = normal_font
-                color = 'black'
-                
-                # フィールド名の描画
-                name_text = f"{field_name}:"
-                draw.text((text_x, current_y), name_text, fill='gray', font=small_font)
-                current_y += self.small_font_size + 2
-                
-                # フィールド値の描画（長い場合は折り返し）
-                value_lines = self.wrap_text(field_value, font, text_width - text_x)
-                for line in value_lines:
-                    if current_y + self.default_font_size > height - 10:
-                        break  # ラベルからはみ出る場合は停止
-                    draw.text((text_x, current_y), line, fill=color, font=font)
-                    current_y += self.default_font_size + 3
-                
-                # フィールド間の間隔
-                current_y += 5
-                
-                if current_y > height - 30:
-                    break  # 残りスペースが少ない場合は停止
+            # レイアウトモードに応じた描画
+            if layout_mode == "vertical":
+                self._draw_vertical_layout(draw, printable_fields, normal_font, small_font, 
+                                         width, height, qr_width, font_size, auto_extend_height)
+            elif layout_mode == "horizontal":
+                self._draw_horizontal_layout(draw, printable_fields, normal_font, small_font, 
+                                           width, height, qr_width, font_size, auto_extend_height, 2)
+            elif layout_mode == "compact":
+                self._draw_horizontal_layout(draw, printable_fields, normal_font, small_font, 
+                                           width, height, qr_width, font_size, auto_extend_height, 3)
+            else:
+                # デフォルトは縦並び
+                self._draw_vertical_layout(draw, printable_fields, normal_font, small_font, 
+                                         width, height, qr_width, font_size, auto_extend_height)
             
             # プレビュー画像をBase64エンコード
             img_buffer = io.BytesIO()
@@ -169,7 +160,7 @@ class LabelPreviewGenerator:
         qr_img = qr.make_image(fill_color="black", back_color="white")
         return qr_img.resize((size, size), Image.Resampling.LANCZOS)
     
-    def wrap_text(self, text: str, font, max_width: int) -> List[str]:
+    def wrap_text(self, text: str, font, max_width: int, font_size: int = 16) -> List[str]:
         """テキストを指定幅で折り返し"""
         lines = []
         words = text.split(' ')
@@ -183,7 +174,7 @@ class LabelPreviewGenerator:
                 text_width = bbox[2] - bbox[0]
             except:
                 # フォールバック: 文字数ベースの概算
-                text_width = len(test_line) * (self.default_font_size * 0.6)
+                text_width = len(test_line) * (font_size * 0.6)
             
             if text_width <= max_width:
                 current_line = test_line
@@ -197,15 +188,241 @@ class LabelPreviewGenerator:
         
         return lines if lines else [text]
     
+    def _calculate_required_height(self, printable_fields: List[Dict[str, Any]], 
+                                  width: int, font_size: int, base_qr_size: int, 
+                                  qr_size_scale: int, min_height: int, include_qr: bool, layout_mode: str = "vertical") -> int:
+        """必要な高さを計算"""
+        try:
+            # QRコードのサイズ計算
+            qr_size = base_qr_size * qr_size_scale if include_qr else 0
+            qr_width = qr_size + 15 if include_qr else 0
+            
+            # テキスト描画エリアの計算
+            text_width = width - qr_width - 20  # 左マージン10 + QRコードとの間隔10
+            current_y = 10  # 上マージン
+            
+            # 仮のフォントを作成（高さ計算用）
+            temp_font = None
+            try:
+                # Windowsフォントを試す
+                import os
+                if os.name == 'nt':  # Windows
+                    from PIL import ImageFont
+                    temp_font = ImageFont.truetype("C:/Windows/Fonts/msgothic.ttc", font_size)
+                else:
+                    temp_font = ImageFont.load_default()
+            except:
+                from PIL import ImageFont
+                temp_font = ImageFont.load_default()
+            
+            # レイアウトモードに応じた高さ計算
+            if layout_mode == "horizontal":
+                # 横並び（2列）の場合
+                columns = 2
+                column_height = self._calculate_column_height(printable_fields, text_width // columns, font_size, temp_font, columns)
+                current_y += column_height
+            elif layout_mode == "compact":
+                # コンパクト（3列）の場合
+                columns = 3
+                column_height = self._calculate_column_height(printable_fields, text_width // columns, font_size, temp_font, columns)
+                current_y += column_height
+            else:
+                # 縦並び（デフォルト）の場合
+                for field in printable_fields:
+                    field_name = field.get('name', '')
+                    field_value = field.get('value', '')
+                    
+                    # 短い値の場合は横並び、長い値の場合は縦並び
+                    if len(field_value) <= 30:
+                        # 横並び（同じ行）の場合
+                        current_y += font_size + 3
+                    else:
+                        # 縦並び（次の行）の場合
+                        current_y += (font_size - 2) + 2  # フィールド名の高さ
+                        value_lines = self.wrap_text(field_value, temp_font, text_width - 10, font_size)
+                        for _ in value_lines:
+                            current_y += font_size + 3
+                    
+                    # フィールド間の間隔
+                    current_y += 5
+            
+            # 下マージンを追加
+            required_height = current_y + 30
+            
+            # 最小高さを保証し、QRコードの高さも考慮
+            if include_qr:
+                qr_required_height = qr_size + 20  # QRコード + マージン
+                required_height = max(required_height, qr_required_height)
+            
+            final_height = max(required_height, min_height)
+            
+            # 高さを適切な単位に丸める（Brother QLプリンターの仕様に合わせて）
+            final_height = ((final_height + 15) // 16) * 16  # 16ピクセル単位に丸める
+            
+            return final_height
+            
+        except Exception as e:
+            # エラーの場合は最小高さを返す
+            return min_height
+    
+    def _draw_vertical_layout(self, draw, printable_fields, normal_font, small_font, 
+                             width, height, qr_width, font_size, auto_extend_height):
+        """縦並びレイアウトで描画"""
+        text_width = width - qr_width - 20  # 左マージン10 + QRコードとの間隔10
+        text_x = 10
+        current_y = 10
+        
+        for i, field in enumerate(printable_fields):
+            field_name = field.get('name', '')
+            field_value = field.get('value', '')
+            
+            # フィールド名の幅を計算
+            name_text = f"{field_name}:"
+            try:
+                name_bbox = small_font.getbbox(name_text)
+                name_width = name_bbox[2] - name_bbox[0] + 5  # 5px間隔
+            except:
+                name_width = len(name_text) * (font_size * 0.5) + 5  # フォールバック
+            
+            # フィールド名を描画
+            draw.text((text_x, current_y), name_text, fill='gray', font=small_font)
+            
+            # フィールド値を名前の横に描画（短い場合）
+            value_text_width = text_width - name_width
+            
+            # 値が短い場合は同じ行に、長い場合は次の行に
+            if len(field_value) <= 30:  # 短いテキストの場合
+                # 同じ行に描画
+                draw.text((text_x + name_width, current_y), field_value, fill='black', font=normal_font)
+                current_y += font_size + 3
+            else:
+                # 長いテキストの場合は次の行に
+                current_y += (font_size - 2) + 2
+                value_lines = self.wrap_text(field_value, normal_font, text_width - text_x, font_size)
+                for line in value_lines:
+                    if not auto_extend_height and current_y + font_size > height - 10:
+                        break
+                    draw.text((text_x, current_y), line, fill='black', font=normal_font)
+                    current_y += font_size + 3
+            
+            # フィールド間の間隔
+            current_y += 5
+            
+            # 動的高さが有効でない場合のみスペース制限
+            if not auto_extend_height and current_y > height - 30:
+                break  # 残りスペースが少ない場合は停止
+    
+    def _draw_horizontal_layout(self, draw, printable_fields, normal_font, small_font, 
+                               width, height, qr_width, font_size, auto_extend_height, columns):
+        """横並びレイアウトで描画"""
+        available_width = width - qr_width - 20  # 利用可能幅
+        column_width = available_width // columns  # 各カラムの幅
+        column_spacing = 10  # カラム間の間隔
+        
+        # 各カラムの開始位置とY位置を初期化
+        column_positions = []
+        column_y_positions = []
+        
+        for col in range(columns):
+            start_x = 10 + col * column_width
+            column_positions.append(start_x)
+            column_y_positions.append(10)  # 初期Y位置
+        
+        # フィールドをカラムに分散配置
+        for i, field in enumerate(printable_fields):
+            col_index = i % columns  # 現在のカラムインデックス
+            current_x = column_positions[col_index]
+            current_y = column_y_positions[col_index]
+            
+            field_name = field.get('name', '')
+            field_value = field.get('value', '')
+            
+            # フィールド名の幅を計算
+            name_text = f"{field_name}:"
+            try:
+                name_bbox = small_font.getbbox(name_text)
+                name_width = name_bbox[2] - name_bbox[0] + 5  # 5px間隔
+            except:
+                name_width = len(name_text) * (font_size * 0.4) + 5  # フォールバック（カラム内なので小さめ）
+            
+            # フィールド名を描画
+            draw.text((current_x, current_y), name_text, fill='gray', font=small_font)
+            
+            # カラム内での有効幅を計算
+            effective_width = column_width - column_spacing
+            value_area_width = effective_width - name_width
+            
+            # 値の長さに応じて配置を決定
+            if len(field_value) <= 15 and name_width < effective_width * 0.4:  # 短い値 & 名前が短い場合
+                # 同じ行に描画
+                draw.text((current_x + name_width, current_y), field_value, fill='black', font=normal_font)
+                current_y += font_size + 3
+            else:
+                # 次の行に描画
+                current_y += (font_size - 2) + 2
+                value_lines = self.wrap_text(field_value, normal_font, effective_width, font_size)
+                
+                for line in value_lines:
+                    if not auto_extend_height and current_y + font_size > height - 10:
+                        break
+                    draw.text((current_x, current_y), line, fill='black', font=normal_font)
+                    current_y += font_size + 3
+            
+            # フィールド間の間隔
+            current_y += 8
+            
+            # カラムのY位置を更新
+            column_y_positions[col_index] = current_y
+            
+            # 動的高さが有効でない場合のみスペース制限
+            if not auto_extend_height and current_y > height - 30:
+                break  # 残りスペースが少ない場合は停止
+    
+    def _calculate_column_height(self, printable_fields, column_width, font_size, temp_font, columns):
+        """カラム配置での必要高さを計算"""
+        column_heights = [0] * columns
+        
+        for i, field in enumerate(printable_fields):
+            col_index = i % columns
+            field_name = field.get('name', '')
+            field_value = field.get('value', '')
+            
+            # 名前の幅を概算
+            name_width = len(field_name) * (font_size * 0.4) + 5
+            effective_width = column_width - 10
+            
+            # 短い値の場合は横並び、長い値の場合は縦並び
+            if len(field_value) <= 15 and name_width < effective_width * 0.4:
+                # 横並び（同じ行）の場合
+                column_heights[col_index] += font_size + 3
+            else:
+                # 縦並び（次の行）の場合
+                column_heights[col_index] += (font_size - 2) + 2  # フィールド名の高さ
+                value_lines = self.wrap_text(field_value, temp_font, effective_width, font_size)
+                for _ in value_lines:
+                    column_heights[col_index] += font_size + 3
+            
+            # フィールド間の間隔
+            column_heights[col_index] += 8
+        
+        # 最も高いカラムの高さを返す
+        return max(column_heights) if column_heights else 0
+    
     def create_print_data(self, printable_fields: List[Dict[str, Any]], 
                          label_size: str = "62",
                          include_qr: bool = True,
                          qr_data: Optional[str] = None,
-                         font_size: int = 12,
-                         qr_size_scale: int = 3) -> Image.Image:
+                         font_size: int = 16,
+                         qr_size_scale: int = 3,
+                         auto_extend_height: bool = True,
+                         layout_mode: str = "vertical") -> Image.Image:
         """印刷用の画像データを作成"""
+        # パラメータの型変換を確実に行う
+        font_size = int(font_size) if font_size is not None else 16
+        qr_size_scale = int(qr_size_scale) if qr_size_scale is not None else 3
+        
         # プレビューと同じロジックで実際の印刷用画像を生成
-        preview_result = self.generate_preview(printable_fields, label_size, include_qr, qr_data, font_size, qr_size_scale)
+        preview_result = self.generate_preview(printable_fields, label_size, include_qr, qr_data, font_size, qr_size_scale, auto_extend_height, layout_mode)
         
         if preview_result.get('success'):
             # Base64データから画像を復元

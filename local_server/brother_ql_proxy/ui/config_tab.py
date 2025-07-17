@@ -63,6 +63,14 @@ class ConfigTab:
             value=proxy.config.get('ngrok_reserved_domain_id', '')
         )
         
+        self.secret_key_field = ft.TextField(
+            label="外部アクセス用シークレットキー",
+            value=proxy.config.get('secret_key', ''),
+            password=True,
+            width=300,
+            helper_text="外部からのアクセス時に'secret'ヘッダーで必要です"
+        )
+        
         self.save_btn = ft.ElevatedButton(
             "設定を保存",
             icon=ft.Icons.SAVE,
@@ -80,6 +88,7 @@ class ConfigTab:
             self.proxy.config['label_size'] = self.label_size_dropdown.value
             self.proxy.config['ngrok_domain'] = self.ngrok_domain_field.value
             self.proxy.config['ngrok_reserved_domain_id'] = self.ngrok_reserved_domain_id_field.value
+            self.proxy.config['secret_key'] = self.secret_key_field.value
             
             self.proxy.save_config()
             self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
@@ -125,6 +134,7 @@ class ConfigTab:
                                 ft.Text("プロキシ設定", size=18, weight=ft.FontWeight.BOLD),
                                 ft.Divider(),
                                 self.proxy_port_field,
+                                self.secret_key_field,
                                 self.ngrok_token_field,
                                 self.ngrok_switch,
                                 self.ngrok_domain_field,

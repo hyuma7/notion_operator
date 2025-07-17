@@ -8,6 +8,7 @@ from flask_cors import CORS
 from PIL import Image as PILImage, ImageDraw, ImageFont
 import qrcode
 import io
+from functools import wraps
 
 from ..utils import convert_to_brother_format
 from ..utils.brother_format import create_simple_test_label
@@ -19,12 +20,62 @@ def create_flask_app(proxy):
     app = Flask(__name__)
     CORS(app)
     
+    @app.after_request
+    def hide_server_info(response):
+        """外部アクセス時にサーバー情報を隠蔽"""
+        client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', ''))
+        is_local = client_ip in ['127.0.0.1', '::1', 'localhost'] or client_ip.startswith('192.168.') or client_ip.startswith('10.') or client_ip.startswith('172.')
+        
+        if not is_local:
+            # 外部アクセス時はサーバー情報を隠蔽
+            response.headers.pop('Server', None)
+            response.headers['Server'] = 'API Server'
+        
+        return response
+    
+    def require_secret_for_external_access(f):
+        """外部アクセス時にsecret_keyを要求するデコレーター"""
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # ローカルアクセスかチェック
+            client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', ''))
+            is_local = client_ip in ['127.0.0.1', '::1', 'localhost'] or client_ip.startswith('192.168.') or client_ip.startswith('10.') or client_ip.startswith('172.')
+            
+            # ローカルアクセスの場合は認証をスキップ
+            if is_local:
+                return f(*args, **kwargs)
+            
+            # 外部アクセスの場合、secret_keyが設定されているかチェック
+            configured_secret = proxy.config.get('secret_key', '')
+            if not configured_secret:
+                proxy.log(f"外部アクセス拒否: secret_keyが設定されていません (IP: {client_ip})", "WARNING")
+                return jsonify({"error": "Unauthorized"}), 401
+            
+            # リクエストから'secret'ヘッダーを取得
+            provided_secret = request.headers.get('secret')
+            
+            if provided_secret != configured_secret:
+                proxy.log(f"外部アクセス拒否: 無効なsecret_key (IP: {client_ip})", "WARNING")
+                return jsonify({"error": "Unauthorized"}), 401
+            
+            proxy.log(f"外部アクセス許可: 有効なsecret_key (IP: {client_ip})", "INFO")
+            return f(*args, **kwargs)
+        return decorated_function
+    
     @app.route('/')
     def index():
         """Webインターフェース"""
+        # 外部アクセス時はWebインターフェースを隠蔽
+        client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR', ''))
+        is_local = client_ip in ['127.0.0.1', '::1', 'localhost'] or client_ip.startswith('192.168.') or client_ip.startswith('10.') or client_ip.startswith('172.')
+        
+        if not is_local:
+            return jsonify({"error": "Not Found"}), 404
+        
         return render_template_string(WEB_INTERFACE_HTML)
     
     @app.route('/', methods=['POST'])
+    @require_secret_for_external_access
     def root_post():
         """ルートパスへのPOSTリクエストを処理してプレビューを生成"""
         try:
@@ -130,6 +181,7 @@ def create_flask_app(proxy):
         return jsonify(response_data)
     
     @app.route('/print/raw', methods=['POST'])
+    @require_secret_for_external_access
     def print_raw():
         """生データを印刷"""
         try:
@@ -150,6 +202,7 @@ def create_flask_app(proxy):
             return jsonify({"status": "error", "message": str(e)}), 500
     
     @app.route('/print/label', methods=['POST'])
+    @require_secret_for_external_access
     def print_label():
         """ラベルを作成して印刷"""
         try:
@@ -236,6 +289,7 @@ def create_flask_app(proxy):
             return jsonify({"status": "error", "message": str(e)}), 500
     
     @app.route('/notion/webhook', methods=['POST'])
+    @require_secret_for_external_access
     def notion_webhook():
         """Notionウェブフックハンドラー"""
         try:
@@ -293,6 +347,7 @@ def create_flask_app(proxy):
             return jsonify({"status": "error", "message": str(e)}), 500
     
     @app.route('/notion/preview', methods=['POST'])
+    @require_secret_for_external_access
     def notion_preview():
         """Notionデータのプレビュー生成"""
         try:
@@ -327,7 +382,7 @@ def create_flask_app(proxy):
             label_size = data.get('label_size', proxy.config.get('label_size', '62'))
             include_qr = data.get('include_qr', True)
             qr_data = data.get('qr_data')
-            font_size = data.get('font_size', 12)
+            font_size = data.get('font_size', 16)
             qr_size = data.get('qr_size', 3)
             
             # QRデータが指定されていない場合はページURLを使用
@@ -360,6 +415,7 @@ def create_flask_app(proxy):
             return jsonify({"status": "error", "message": str(e)}), 500
     
     @app.route('/notion/print', methods=['POST'])
+    @require_secret_for_external_access
     def notion_print():
         """Notionデータを印刷"""
         try:
@@ -396,7 +452,7 @@ def create_flask_app(proxy):
             label_size = data.get('label_size', proxy.config.get('label_size', '62'))
             include_qr = data.get('include_qr', True)
             qr_data = data.get('qr_data')
-            font_size = data.get('font_size', 12)
+            font_size = data.get('font_size', 16)
             qr_size = data.get('qr_size', 3)
             
             if include_qr and not qr_data:
@@ -542,12 +598,20 @@ WEB_INTERFACE_HTML = '''
             <div id="print-controls" style="display: none; margin-top: 20px;">
                 <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
                     <div style="margin-bottom: 15px;">
-                        <label for="font-size-slider" style="display: block; margin-bottom: 5px; font-weight: 500;">文字サイズ: <span id="font-size-value">12</span>px</label>
-                        <input type="range" id="font-size-slider" min="8" max="24" value="12" style="width: 100%;" oninput="updateFontSize(this.value)">
+                        <label for="font-size-slider" style="display: block; margin-bottom: 5px; font-weight: 500;">文字サイズ: <span id="font-size-value">16</span>px</label>
+                        <input type="range" id="font-size-slider" min="8" max="36" value="16" style="width: 100%;" oninput="updateFontSize(this.value)">
                     </div>
                     <div style="margin-bottom: 15px;">
                         <label for="qr-size-slider" style="display: block; margin-bottom: 5px; font-weight: 500;">QRコードサイズ: <span id="qr-size-value">3</span></label>
                         <input type="range" id="qr-size-slider" min="1" max="8" value="3" style="width: 100%;" oninput="updateQRSize(this.value)">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label for="layout-mode" style="display: block; margin-bottom: 5px; font-weight: 500;">レイアウトモード:</label>
+                        <select id="layout-mode" style="width: 100%; padding: 5px;" onchange="updateLayoutMode(this.value)">
+                            <option value="vertical">縦並び（標準）</option>
+                            <option value="horizontal">横並び（2列）</option>
+                            <option value="compact">コンパクト（3列）</option>
+                        </select>
                     </div>
                     <button class="btn-primary" onclick="updatePreview()" style="background-color: #28a745; margin-bottom: 10px;">プレビュー更新</button>
                 </div>
@@ -565,6 +629,20 @@ WEB_INTERFACE_HTML = '''
             <div class="api-endpoint">POST /notion/webhook - Notionウェブフック</div>
             <div class="api-endpoint">POST /notion/preview - Notionプレビュー生成</div>
             <div class="api-endpoint">POST /notion/print - Notion印刷</div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px;">
+                <h4 style="margin-top: 0; color: #856404;">🔒 外部アクセス認証</h4>
+                <p style="margin-bottom: 10px; color: #856404; font-size: 14px;">
+                    外部からのアクセス時は以下のヘッダーでSecret Keyが必要です：
+                </p>
+                <div style="font-family: monospace; font-size: 12px; color: #856404;">
+                    • ヘッダー: <code>secret: your-secret-key</code>
+                </div>
+                <p style="margin-top: 10px; margin-bottom: 0; color: #856404; font-size: 12px;">
+                    ローカルアクセス（192.168.x.x, 10.x.x.x, 172.x.x.x, 127.0.0.1）は認証不要
+                </p>
+            </div>
+            
             <div style="margin-top: 20px; text-align: right;">
                 <button onclick="simpleTest()" style="font-size: 11px; padding: 4px 12px; background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; border-radius: 3px; cursor: pointer;">接続テスト</button>
             </div>
@@ -606,17 +684,62 @@ WEB_INTERFACE_HTML = '''
         }
         
         let latestNotionData = null;
-        let currentFontSize = 12;
-        let currentQRSize = 3;
+        let currentFontSize = parseInt(localStorage.getItem('labelFontSize')) || 16;
+        let currentQRSize = parseInt(localStorage.getItem('labelQRSize')) || 3;
+        let currentLayoutMode = localStorage.getItem('labelLayoutMode') || 'vertical';
+        let lastDataHash = null; // データ変更検出用
         
         function updateFontSize(value) {
-            currentFontSize = value;
+            currentFontSize = parseInt(value);
             document.getElementById('font-size-value').textContent = value;
+            localStorage.setItem('labelFontSize', value);
+            console.log('フォントサイズを保存:', value);
         }
         
         function updateQRSize(value) {
-            currentQRSize = value;
+            currentQRSize = parseInt(value);
             document.getElementById('qr-size-value').textContent = value;
+            localStorage.setItem('labelQRSize', value);
+            console.log('QRサイズを保存:', value);
+        }
+        
+        function updateLayoutMode(value) {
+            currentLayoutMode = value;
+            localStorage.setItem('labelLayoutMode', value);
+            console.log('レイアウトモードを保存:', value);
+        }
+        
+        function loadSavedSettings() {
+            // 保存された設定を読み込み
+            const savedFontSize = parseInt(localStorage.getItem('labelFontSize')) || 16;
+            const savedQRSize = parseInt(localStorage.getItem('labelQRSize')) || 3;
+            const savedLayoutMode = localStorage.getItem('labelLayoutMode') || 'vertical';
+            
+            currentFontSize = savedFontSize;
+            currentQRSize = savedQRSize;
+            currentLayoutMode = savedLayoutMode;
+            
+            document.getElementById('font-size-slider').value = savedFontSize;
+            document.getElementById('font-size-value').textContent = savedFontSize;
+            document.getElementById('qr-size-slider').value = savedQRSize;
+            document.getElementById('qr-size-value').textContent = savedQRSize;
+            document.getElementById('layout-mode').value = savedLayoutMode;
+            
+            console.log('保存された設定を読み込み:', {fontSize: savedFontSize, qrSize: savedQRSize, layoutMode: savedLayoutMode});
+        }
+        
+        function generateDataHash(data) {
+            // データのハッシュ値を生成してコンテンツ変更を検出
+            if (!data || !data.printable_fields) return null;
+            
+            const fieldsString = data.printable_fields.map(field => 
+                field.name + ':' + field.value + ':' + field.type
+            ).join('|');
+            
+            const pageUrl = data.parsed_data?.page_url || '';
+            const timestamp = data.timestamp || '';
+            
+            return fieldsString + '|' + pageUrl + '|' + timestamp;
         }
         
         async function updatePreview() {
@@ -634,6 +757,7 @@ WEB_INTERFACE_HTML = '''
                         parsed_data: latestNotionData.parsed_data,
                         font_size: currentFontSize,
                         qr_size: currentQRSize,
+                        layout_mode: currentLayoutMode,
                         label_size: latestNotionData.preview?.dimensions?.label_size || '62',
                         include_qr: true,
                         qr_data: latestNotionData.parsed_data?.parsed_data?.page_url || latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL'
@@ -651,33 +775,68 @@ WEB_INTERFACE_HTML = '''
             }
         }
         
+        async function generatePreviewWithUserSettings() {
+            // ユーザー指定の設定でプレビューを生成
+            if (!latestNotionData) return;
+            
+            try {
+                const response = await fetch('/notion/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        printable_fields: latestNotionData.printable_fields,
+                        parsed_data: latestNotionData.parsed_data,
+                        font_size: currentFontSize,
+                        qr_size: currentQRSize,
+                        layout_mode: currentLayoutMode,
+                        label_size: latestNotionData.preview?.dimensions?.label_size || '62',
+                        include_qr: true,
+                        qr_data: latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL'
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'success' && data.preview) {
+                    displayPreview(data.preview);
+                }
+            } catch (e) {
+                console.error('Preview generation error:', e);
+            }
+        }
+        
         async function checkLatestPreview() {
             try {
                 const response = await fetch('/latest-preview');
                 const data = await response.json();
                 
                 if (data.status === 'success' && data.data) {
-                    const webhookStatus = document.getElementById('webhook-status');
-                    webhookStatus.style.background = '#d4edda';
-                    webhookStatus.innerHTML = '<p style="margin: 0; color: #155724;">✅ Notionデータを受信しました - ' + new Date(data.data.timestamp).toLocaleString() + '</p>';
+                    // データ変更検出
+                    const newDataHash = generateDataHash(data.data);
+                    const hasDataChanged = lastDataHash !== newDataHash;
                     
-                    latestNotionData = data.data;
-                    
-                    // プレビューを表示
-                    if (data.data.printable_fields) {
-                        displayNotionResult({
-                            status: 'success',
-                            parsed_data: data.data.parsed_data,
-                            printable_fields: data.data.printable_fields
-                        });
+                    if (hasDataChanged) {
+                        const webhookStatus = document.getElementById('webhook-status');
+                        webhookStatus.style.background = '#d4edda';
+                        webhookStatus.innerHTML = '<p style="margin: 0; color: #155724;">✅ Notionデータを受信しました - ' + new Date(data.data.timestamp).toLocaleString() + '</p>';
+                        
+                        latestNotionData = data.data;
+                        lastDataHash = newDataHash;
+                        
+                        // プレビューを表示
+                        if (data.data.printable_fields) {
+                            displayNotionResult({
+                                status: 'success',
+                                parsed_data: data.data.parsed_data,
+                                printable_fields: data.data.printable_fields
+                            });
+                        }
+                        
+                        // 印刷コントロールを表示
+                        document.getElementById('print-controls').style.display = 'block';
+                        
+                        // ユーザー指定のフォントサイズでプレビューを自動更新
+                        await generatePreviewWithUserSettings();
                     }
-                    
-                    if (data.data.preview) {
-                        displayPreview(data.data.preview);
-                    }
-                    
-                    // 印刷コントロールを表示
-                    document.getElementById('print-controls').style.display = 'block';
                 }
             } catch (e) {
                 console.error('Preview check error:', e);
@@ -691,7 +850,7 @@ WEB_INTERFACE_HTML = '''
             }
             
             try {
-                // 最新のデータで印刷
+                // ユーザー指定の設定で印刷
                 const response = await fetch('/notion/print', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -702,7 +861,8 @@ WEB_INTERFACE_HTML = '''
                         include_qr: true,
                         qr_data: latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL',
                         font_size: currentFontSize,
-                        qr_size: currentQRSize
+                        qr_size: currentQRSize,
+                        layout_mode: currentLayoutMode
                     })
                 });
                 
@@ -776,6 +936,7 @@ WEB_INTERFACE_HTML = '''
             }
         }
         
+        loadSavedSettings(); // 保存された設定を読み込み
         checkStatus();
         checkLatestPreview();
         setInterval(checkStatus, 30000); // 30秒間隔に変更

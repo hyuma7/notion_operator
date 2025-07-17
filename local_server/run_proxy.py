@@ -16,17 +16,17 @@ def main():
         
         try:
             import flet as ft
-            print("✓ Flet インポート成功")
+            print("[OK] Flet インポート成功")
         except ImportError as e:
-            print(f"✗ Flet インポートエラー: {e}")
+            print(f"[ERROR] Flet インポートエラー: {e}")
             print("pip install flet でインストールしてください")
             return
         
         try:
             from brother_ql_proxy.main import main as app_main
-            print("✓ アプリケーション インポート成功")
+            print("[OK] アプリケーション インポート成功")
         except ImportError as e:
-            print(f"✗ アプリケーション インポートエラー: {e}")
+            print(f"[ERROR] アプリケーション インポートエラー: {e}")
             return
         
         print("アプリケーション起動中...")
