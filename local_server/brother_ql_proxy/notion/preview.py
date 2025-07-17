@@ -20,19 +20,24 @@ class LabelPreviewGenerator:
     def generate_preview(self, printable_fields: List[Dict[str, Any]], 
                         label_size: str = "62", 
                         include_qr: bool = True,
-                        qr_data: Optional[str] = None) -> Dict[str, Any]:
+                        qr_data: Optional[str] = None,
+                        font_size: int = 12,
+                        qr_size_scale: int = 3) -> Dict[str, Any]:
         """印刷プレビューを生成"""
         try:
             # ラベルサイズの設定（テストスクリプトと同じサイズ）
             if label_size in ['62x29', '62']:
                 width, height = 696, 271  # テストスクリプトと同じ
-                qr_size = 100  # QRコードは小さく
+                base_qr_size = 50  # ベースサイズ
             elif label_size == '62x100':
                 width, height = 696, 1109
-                qr_size = 150
+                base_qr_size = 75  # ベースサイズ
             else:
                 width, height = 696, 271
-                qr_size = 100
+                base_qr_size = 50  # ベースサイズ
+            
+            # QRコードサイズをスケールに基づいて計算
+            qr_size = base_qr_size * qr_size_scale
             
             # 背景画像を作成
             img = Image.new('RGB', (width, height), 'white')
@@ -65,9 +70,9 @@ class LabelPreviewGenerator:
             
             for font_path in japanese_fonts:
                 try:
-                    title_font = ImageFont.truetype(font_path, self.title_font_size)
-                    normal_font = ImageFont.truetype(font_path, self.default_font_size)
-                    small_font = ImageFont.truetype(font_path, self.small_font_size)
+                    title_font = ImageFont.truetype(font_path, font_size + 4)  # タイトルは指定サイズ+4
+                    normal_font = ImageFont.truetype(font_path, font_size)     # 通常は指定サイズ
+                    small_font = ImageFont.truetype(font_path, font_size - 2)  # 小さいフォントは指定サイズ-2
                     font_loaded = True
                     break
                 except:
@@ -77,9 +82,9 @@ class LabelPreviewGenerator:
             if not font_loaded:
                 try:
                     # Windowsフォントを試す
-                    title_font = ImageFont.truetype("arial.ttf", self.title_font_size)
-                    normal_font = ImageFont.truetype("arial.ttf", self.default_font_size)
-                    small_font = ImageFont.truetype("arial.ttf", self.small_font_size)
+                    title_font = ImageFont.truetype("arial.ttf", font_size + 4)
+                    normal_font = ImageFont.truetype("arial.ttf", font_size)
+                    small_font = ImageFont.truetype("arial.ttf", font_size - 2)
                 except:
                     # デフォルトフォント
                     title_font = ImageFont.load_default()
@@ -195,10 +200,12 @@ class LabelPreviewGenerator:
     def create_print_data(self, printable_fields: List[Dict[str, Any]], 
                          label_size: str = "62",
                          include_qr: bool = True,
-                         qr_data: Optional[str] = None) -> Image.Image:
+                         qr_data: Optional[str] = None,
+                         font_size: int = 12,
+                         qr_size_scale: int = 3) -> Image.Image:
         """印刷用の画像データを作成"""
         # プレビューと同じロジックで実際の印刷用画像を生成
-        preview_result = self.generate_preview(printable_fields, label_size, include_qr, qr_data)
+        preview_result = self.generate_preview(printable_fields, label_size, include_qr, qr_data, font_size, qr_size_scale)
         
         if preview_result.get('success'):
             # Base64データから画像を復元

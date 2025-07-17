@@ -24,7 +24,20 @@ class NotionPageParser:
             data = webhook_data.get('data', {})
             page_data = data.get('page', {}) if event_type == 'page_property_updated' else data
             
-            if not page_data:
+            # 既に解析済みのデータの場合（printable_fieldsが存在する場合）
+            if 'printable_fields' in webhook_data:
+                # 解析済みデータをそのまま返す
+                return {
+                    'success': True,
+                    'event_type': 'preprocessed',
+                    'event_time': event_time,
+                    'page_id': webhook_data.get('parsed_data', {}).get('page_id', ''),
+                    'page_url': webhook_data.get('parsed_data', {}).get('page_url', ''),
+                    'title': webhook_data.get('parsed_data', {}).get('title', ''),
+                    'properties': webhook_data.get('parsed_data', {}).get('properties', {})
+                }
+            
+            if not page_data and 'parsed_data' not in webhook_data:
                 return {
                     'error': 'ページデータが見つかりません',
                     'event_type': event_type,
@@ -235,20 +248,8 @@ class NotionPageParser:
     
     def print_request_data(self, webhook_data: Dict[str, Any]) -> None:
         """受信したリクエストデータを整形して出力"""
-        print("=" * 50)
-        print("Notionリクエストデータ (JSON):")
-        print("-" * 50)
-        
-        try:
-            # JSONとして整形して出力
-            print(json.dumps(webhook_data, indent=2, ensure_ascii=False))
-            print("=" * 50)
-            
-        except Exception as e:
-            print(f"データ出力エラー: {str(e)}")
-            print("元のデータ:")
-            print(str(webhook_data))
-            print("=" * 50)
+        # デバッグ出力を削除（プリント文の削除）
+        pass
     
     def get_printable_fields(self, parsed_data: Dict[str, Any]) -> List[Dict[str, Any]]:
         """印刷可能なフィールドを取得"""

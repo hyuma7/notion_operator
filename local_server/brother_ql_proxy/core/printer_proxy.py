@@ -182,7 +182,28 @@ class PrinterProxy:
             from pyngrok import ngrok
             
             ngrok.set_auth_token(self.config['ngrok_authtoken'])
-            tunnel = ngrok.connect(self.config['proxy_port'], "http")
+            
+            # 固定ドメインまたは予約済みドメインIDが設定されている場合
+            if self.config.get('ngrok_domain'):
+                # 固定ドメインを使用
+                tunnel = ngrok.connect(
+                    self.config['proxy_port'], 
+                    "http",
+                    hostname=self.config['ngrok_domain']
+                )
+                self.log(f"ngrokトンネルを固定ドメインで開始: {self.config['ngrok_domain']}")
+            elif self.config.get('ngrok_reserved_domain_id'):
+                # 予約済みドメインIDを使用
+                tunnel = ngrok.connect(
+                    self.config['proxy_port'], 
+                    "http",
+                    hostname=f"id:{self.config['ngrok_reserved_domain_id']}"
+                )
+                self.log(f"ngrokトンネルを予約済みドメインIDで開始: {self.config['ngrok_reserved_domain_id']}")
+            else:
+                # 通常のランダムドメイン
+                tunnel = ngrok.connect(self.config['proxy_port'], "http")
+                
             # NgrokTunnelオブジェクトから公開URLを文字列として取得
             self.ngrok_url = str(tunnel.public_url) if hasattr(tunnel, 'public_url') else str(tunnel)
             self.log(f"ngrokトンネルを開始: {self.ngrok_url}")

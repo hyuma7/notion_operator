@@ -51,6 +51,18 @@ class ConfigTab:
             value=proxy.config.get('label_size', '62x29')
         )
         
+        self.ngrok_domain_field = ft.TextField(
+            label="ngrok固定ドメイン（例: ○○.ngrok-free.app）",
+            width=300,
+            value=proxy.config.get('ngrok_domain', '')
+        )
+        
+        self.ngrok_reserved_domain_id_field = ft.TextField(
+            label="ngrok予約済みドメインID（例: rd_○○）",
+            width=300,
+            value=proxy.config.get('ngrok_reserved_domain_id', '')
+        )
+        
         self.save_btn = ft.ElevatedButton(
             "設定を保存",
             icon=ft.Icons.SAVE,
@@ -66,6 +78,8 @@ class ConfigTab:
             self.proxy.config['ngrok_authtoken'] = self.ngrok_token_field.value
             self.proxy.config['enable_ngrok'] = self.ngrok_switch.value
             self.proxy.config['label_size'] = self.label_size_dropdown.value
+            self.proxy.config['ngrok_domain'] = self.ngrok_domain_field.value
+            self.proxy.config['ngrok_reserved_domain_id'] = self.ngrok_reserved_domain_id_field.value
             
             self.proxy.save_config()
             self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
@@ -112,7 +126,9 @@ class ConfigTab:
                                 ft.Divider(),
                                 self.proxy_port_field,
                                 self.ngrok_token_field,
-                                self.ngrok_switch
+                                self.ngrok_switch,
+                                self.ngrok_domain_field,
+                                self.ngrok_reserved_domain_id_field
                             ])
                         )
                     ),

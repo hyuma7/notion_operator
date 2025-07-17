@@ -37,8 +37,6 @@ def create_flask_app(proxy):
             
             # Notionデータを解析
             parser = NotionPageParser()
-            # リクエストデータを整形して出力
-            parser.print_request_data(webhook_data)
             
             parsed_data = parser.parse_webhook_data(webhook_data)
             
@@ -66,7 +64,8 @@ def create_flask_app(proxy):
                 "preview": preview_result,
                 "parsed_data": parsed_data,
                 "printable_fields": printable_fields,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "original_webhook_data": webhook_data  # 元のウェブフックデータを保存
             }
             
             return jsonify({
@@ -260,8 +259,6 @@ def create_flask_app(proxy):
             
             # Notionデータを解析
             parser = NotionPageParser()
-            # リクエストデータを整形して出力
-            parser.print_request_data(webhook_data)
             
             parsed_data = parser.parse_webhook_data(webhook_data)
             
@@ -330,6 +327,8 @@ def create_flask_app(proxy):
             label_size = data.get('label_size', proxy.config.get('label_size', '62'))
             include_qr = data.get('include_qr', True)
             qr_data = data.get('qr_data')
+            font_size = data.get('font_size', 12)
+            qr_size = data.get('qr_size', 3)
             
             # QRデータが指定されていない場合はページURLを使用
             if include_qr and not qr_data:
@@ -341,7 +340,7 @@ def create_flask_app(proxy):
                     qr_data = data.get('title', 'No URL')
             
             preview_result = preview_generator.generate_preview(
-                printable_fields, label_size, include_qr, qr_data
+                printable_fields, label_size, include_qr, qr_data, font_size, qr_size
             )
             
             if preview_result.get('success'):
@@ -397,6 +396,8 @@ def create_flask_app(proxy):
             label_size = data.get('label_size', proxy.config.get('label_size', '62'))
             include_qr = data.get('include_qr', True)
             qr_data = data.get('qr_data')
+            font_size = data.get('font_size', 12)
+            qr_size = data.get('qr_size', 3)
             
             if include_qr and not qr_data:
                 if 'parsed_data' in locals() and parsed_data.get('page_url'):
@@ -407,7 +408,7 @@ def create_flask_app(proxy):
                     qr_data = data.get('title', 'No URL')
             
             print_img = preview_generator.create_print_data(
-                printable_fields, label_size, include_qr, qr_data
+                printable_fields, label_size, include_qr, qr_data, font_size, qr_size
             )
             
             proxy.log(f"印刷画像生成完了: {print_img.size}")
@@ -530,12 +531,6 @@ WEB_INTERFACE_HTML = '''
         <h1>🖨️ Brother QL プリンタープロキシサーバー</h1>
         <div id="status" class="status">接続状態を確認中...</div>
         
-        <div class="test-form">
-            <h3>テスト印刷</h3>
-            <input type="text" id="test-text" placeholder="印刷するテキストを入力">
-            <button class="btn-primary" onclick="testPrint()">テスト印刷</button>
-            <button class="btn-primary" onclick="simpleTest()">シンプルテスト</button>
-        </div>
         
         <div class="test-form">
             <h3>🗒️ Notion データプレビュー</h3>
@@ -545,6 +540,17 @@ WEB_INTERFACE_HTML = '''
             <div id="notion-result" style="margin-top: 20px;"></div>
             <div id="notion-preview" style="margin-top: 20px;"></div>
             <div id="print-controls" style="display: none; margin-top: 20px;">
+                <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <div style="margin-bottom: 15px;">
+                        <label for="font-size-slider" style="display: block; margin-bottom: 5px; font-weight: 500;">文字サイズ: <span id="font-size-value">12</span>px</label>
+                        <input type="range" id="font-size-slider" min="8" max="24" value="12" style="width: 100%;" oninput="updateFontSize(this.value)">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label for="qr-size-slider" style="display: block; margin-bottom: 5px; font-weight: 500;">QRコードサイズ: <span id="qr-size-value">3</span></label>
+                        <input type="range" id="qr-size-slider" min="1" max="8" value="3" style="width: 100%;" oninput="updateQRSize(this.value)">
+                    </div>
+                    <button class="btn-primary" onclick="updatePreview()" style="background-color: #28a745; margin-bottom: 10px;">プレビュー更新</button>
+                </div>
                 <button class="btn-primary" onclick="printLatestNotion()">🖨️ このラベルを印刷</button>
                 <button class="btn-primary" onclick="clearPreview()" style="background-color: #6c757d;">クリア</button>
             </div>
@@ -559,6 +565,9 @@ WEB_INTERFACE_HTML = '''
             <div class="api-endpoint">POST /notion/webhook - Notionウェブフック</div>
             <div class="api-endpoint">POST /notion/preview - Notionプレビュー生成</div>
             <div class="api-endpoint">POST /notion/print - Notion印刷</div>
+            <div style="margin-top: 20px; text-align: right;">
+                <button onclick="simpleTest()" style="font-size: 11px; padding: 4px 12px; background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; border-radius: 3px; cursor: pointer;">接続テスト</button>
+            </div>
         </div>
     </div>
     
@@ -581,20 +590,6 @@ WEB_INTERFACE_HTML = '''
             }
         }
         
-        async function testPrint() {
-            const text = document.getElementById('test-text').value || 'テスト印刷';
-            try {
-                const response = await fetch('/print/label', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({text: text})
-                });
-                const data = await response.json();
-                alert(data.message || '印刷しました');
-            } catch (e) {
-                alert('エラー: ' + e.message);
-            }
-        }
         
         async function simpleTest() {
             try {
@@ -611,6 +606,50 @@ WEB_INTERFACE_HTML = '''
         }
         
         let latestNotionData = null;
+        let currentFontSize = 12;
+        let currentQRSize = 3;
+        
+        function updateFontSize(value) {
+            currentFontSize = value;
+            document.getElementById('font-size-value').textContent = value;
+        }
+        
+        function updateQRSize(value) {
+            currentQRSize = value;
+            document.getElementById('qr-size-value').textContent = value;
+        }
+        
+        async function updatePreview() {
+            if (!latestNotionData) {
+                alert('Notionデータがありません。まずNotionからデータを受信してください。');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/notion/preview', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        printable_fields: latestNotionData.parsed_data?.printable_fields || latestNotionData.printable_fields,
+                        parsed_data: latestNotionData.parsed_data,
+                        font_size: currentFontSize,
+                        qr_size: currentQRSize,
+                        label_size: latestNotionData.preview?.dimensions?.label_size || '62',
+                        include_qr: true,
+                        qr_data: latestNotionData.parsed_data?.parsed_data?.page_url || latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL'
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.status === 'success' && data.preview) {
+                    displayPreview(data.preview);
+                } else {
+                    alert('プレビューの更新に失敗しました: ' + (data.message || 'エラー'));
+                }
+            } catch (e) {
+                alert('エラー: ' + e.message);
+            }
+        }
         
         async function checkLatestPreview() {
             try {
@@ -661,7 +700,9 @@ WEB_INTERFACE_HTML = '''
                         parsed_data: latestNotionData.parsed_data,
                         label_size: latestNotionData.preview?.dimensions?.label_size || '62',
                         include_qr: true,
-                        qr_data: latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL'
+                        qr_data: latestNotionData.parsed_data?.page_url || latestNotionData.parsed_data?.title || 'No URL',
+                        font_size: currentFontSize,
+                        qr_size: currentQRSize
                     })
                 });
                 

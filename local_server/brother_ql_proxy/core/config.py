@@ -13,5 +13,7 @@ DEFAULT_CONFIG = {
     "proxy_port": 8080,
     "ngrok_authtoken": "",
     "enable_ngrok": False,
-    "label_size": "62"
+    "label_size": "62",
+    "ngrok_domain": "",
+    "ngrok_reserved_domain_id": ""
 }
