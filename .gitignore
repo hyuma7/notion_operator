@@ -6,3 +6,6 @@ __pycache__/
 venv/
 ENV/
 .DS_Store 
+*.log
+*.spec
+printer_proxy_config.json

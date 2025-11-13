@@ -1,3 +1,4 @@
-notion-client
-functions-framework
-flask
+functions-framework==3.*
+Pillow==10.3.0
+qrcode[pil]==7.4.2
+flask==3.0.3
