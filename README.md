@@ -1,75 +1,83 @@
-# notion_operator
+### 使用技術
+- NotionのSDKとPythonを使用
+- クラウドはGcloudを使用
+- Cloud Functionsを使用
 
-NotionのAPIとPythonを使用して色々なことを実現するためのリポジトリです。
+### 機能一覧
+- 自分自身のQRブロック追加
 
-## Flat在庫管理システム
+# Notion QRコード生成ツール
 
-Notionデータベースから「売却済み」の物件データを取得し、Excelファイルとして出力するStreamlitアプリケーションです。
+Notionページに簡単にQRコードを追加するためのGoogle Cloud Functions実装です。
 
-### 機能
+## 機能概要
 
-- 📅 年月による期間指定
-- 🔍 「在庫状態」が「売却済み」のデータのみをフィルタリング
-- 📊 取得データのプレビュー表示
-- 💾 Excel形式でのエクスポート
+- Notionページへのカスタム QRコードブロック追加
+- 指定されたデータから動的にQRコード生成
+- カスタムキャプション対応
+- クラウドベースのサーバーレスアーキテクチャ
 
-### セットアップ
+## 技術スタック
 
-1. 必要なパッケージをインストール:
+### バックエンド
+- **言語**: Python 3.10
+- **クラウド環境**: Google Cloud Platform (GCP)
+- **サーバーレス**: Google Cloud Functions
+- **ストレージ**: Google Cloud Storage
+- **APIクライアント**: Notion SDK for Python
+
+### ライブラリ
+- **notion-client**: Notion APIとの連携
+- **qrcode**: QRコード生成
+- **Pillow**: 画像処理
+- **functions-framework**: Cloud Functionsローカル開発環境
+- **google-cloud-storage**: GCSとの連携
+
+### APIと連携
+- **Notion API**: ページへのコンテンツ追加
+- **Google Cloud Storage API**: 画像ファイル保存と公開URL生成
+
+### 開発ツール
+- **gcloud CLI**: デプロイと管理
+- **Git**: バージョン管理
+
+## セットアップと展開方法
+
+1. Notion API統合の設定 (詳細は `Notion API 統合セットアップ.md` 参照)
+2. GCPプロジェクトの設定
+3. Cloud Functionsのデプロイ (詳細は `Cloud Functions デプロイ手順.md` 参照)
+
+## 使用方法
+
+デプロイされたCloud FunctionsのエンドポイントにPOSTリクエストを送信します：
+
 ```bash
-pip install -r requirements.txt
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"page_id": "YOUR_PAGE_ID", "data": "https://example.com", "caption": "Webサイトへのリンク"}' \
+  https://REGION-PROJECT_ID.cloudfunctions.net/add_qr_code
 ```
 
-2. 環境変数を設定:
-`.env.example`を`.env`にコピーして、以下の値を設定してください:
+## ライセンス
+
+MITライセンス
+
+## 貢献方法
+
+1. リポジトリをフォーク
+2. 機能ブランチを作成 (`git checkout -b feature/amazing-feature`)
+3. 変更をコミット (`git commit -m 'Add some amazing feature'`)
+4. ブランチにプッシュ (`git push origin feature/amazing-feature`)
+5. プルリクエストを開く
+
+## プロジェクト構造
+
 ```
-NOTION_API_KEY=your_notion_api_key_here
-NOTION_DATABASE_ID=your_database_id_here
+notion-qr-tool/
+├── main.py          # Cloud Functions エントリーポイント
+├── requirements.txt # 依存関係
+├── README.md        # このファイル
+└── docs/            # ドキュメント
+    ├── notion-integration.md
+    └── deployment-instructions.md
 ```
-
-### Notion APIキーの取得方法
-
-1. [Notion Integrations](https://www.notion.so/my-integrations)にアクセス
-2. 「New integration」をクリック
-3. インテグレーション名を入力し、「Submit」をクリック
-4. 「Internal Integration Token」をコピーして`.env`ファイルに設定
-
-### データベースIDの取得方法
-
-1. Notionでデータベースを開く
-2. URLから以下の部分をコピー:
-   `https://www.notion.so/workspace/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=...`
-   `xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`の部分がデータベースIDです
-3. データベースをインテグレーションと共有（データベースの右上「...」→「Add connections」→作成したインテグレーションを選択）
-
-### 実行方法
-
-```bash
-streamlit run app.py
-```
-
-### 使い方
-
-1. アプリを起動すると、ブラウザが自動的に開きます
-2. 年と月を選択
-3. 「データを取得」ボタンをクリック
-4. データプレビューを確認
-5. 「Excelファイルをダウンロード」ボタンでエクスポート
-
-### 注意事項
-
-- Notionデータベースには以下のプロパティが必要です:
-  - `在庫状態`: セレクトプロパティ（「売却済み」オプションを含む）
-  - `売却日`: 日付プロパティ
-- プロパティ名が異なる場合は、`app.py`内の該当箇所を修正してください
-
-### トラブルシューティング
-
-- **データが取得できない場合**:
-  - Notion APIキーとデータベースIDが正しく設定されているか確認
-  - データベースがインテグレーションと共有されているか確認
-  - プロパティ名が正しいか確認
-
-- **エラーが表示される場合**:
-  - 環境変数が正しく読み込まれているか確認
-  - 必要なパッケージがすべてインストールされているか確認
