@@ -1,14 +1,21 @@
-# Streamlit app (app.py)
-streamlit>=1.28.0
-pandas>=2.0.0
-notion-client>=2.0.0
-python-dotenv>=1.0.0
-openpyxl>=3.1.0
+# Main app (local_server/brother_ql_proxy)
+flet>=0.19.0
+flask>=2.3.0
+flask-cors>=4.0.0
+requests>=2.31.0
+Pillow>=10.0.0
+qrcode>=7.4.0
+pystray>=0.19.0
+pyngrok>=7.0.0
+werkzeug>=2.3.0
+notion-client>=2.2.1
+pandas>=2.1.0
+openpyxl>=3.1.2
 
 # Cloud Functions (func/)
 functions-framework>=3.0.0
-Flask>=3.0.0
 google-cloud-storage>=2.0.0
-qrcode[pil]>=7.0.0
-Pillow>=9.0.0,<10.0.0
-Werkzeug>=2.2.0,<3.0.0
+
+# Development
+python-dotenv>=1.0.0
+pyinstaller>=6.0.0
