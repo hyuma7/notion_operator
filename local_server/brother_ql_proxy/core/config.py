@@ -16,5 +16,7 @@ DEFAULT_CONFIG = {
     "label_size": "62",
     "ngrok_domain": "",
     "ngrok_reserved_domain_id": "",
-    "secret_key": ""
+    "secret_key": "",
+    "notion_api_key": "",
+    "notion_database_id": "1d254e6206d881bb9e88d2e7ffb90444"
 }
