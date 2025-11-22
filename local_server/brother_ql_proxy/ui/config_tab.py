@@ -70,7 +70,21 @@ class ConfigTab:
             width=300,
             helper_text="外部からのアクセス時に'secret'ヘッダーで必要です"
         )
-        
+
+        # Notion設定
+        self.notion_api_key_field = ft.TextField(
+            label="Notion API Key",
+            value=proxy.config.get('notion_api_key', ''),
+            password=True,
+            width=300
+        )
+
+        self.notion_database_id_field = ft.TextField(
+            label="Notion Database ID",
+            value=proxy.config.get('notion_database_id', ''),
+            width=300
+        )
+
         self.save_btn = ft.ElevatedButton(
             "設定を保存",
             icon=ft.Icons.SAVE,
@@ -89,7 +103,9 @@ class ConfigTab:
             self.proxy.config['ngrok_domain'] = self.ngrok_domain_field.value
             self.proxy.config['ngrok_reserved_domain_id'] = self.ngrok_reserved_domain_id_field.value
             self.proxy.config['secret_key'] = self.secret_key_field.value
-            
+            self.proxy.config['notion_api_key'] = self.notion_api_key_field.value
+            self.proxy.config['notion_database_id'] = self.notion_database_id_field.value
+
             self.proxy.save_config()
             self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
         except ValueError as e:
@@ -139,6 +155,17 @@ class ConfigTab:
                                 self.ngrok_switch,
                                 self.ngrok_domain_field,
                                 self.ngrok_reserved_domain_id_field
+                            ])
+                        )
+                    ),
+                    ft.Card(
+                        content=ft.Container(
+                            padding=ft.padding.all(20),
+                            content=ft.Column([
+                                ft.Text("Notion設定", size=18, weight=ft.FontWeight.BOLD),
+                                ft.Divider(),
+                                self.notion_api_key_field,
+                                self.notion_database_id_field
                             ])
                         )
                     ),

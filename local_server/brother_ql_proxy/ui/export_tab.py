@@ -23,27 +23,6 @@ class ExportTab:
         self.page = page
         self.df = None
 
-        # Notion設定（proxyの設定から読み込み、環境変数をフォールバック）
-        self.api_key_field = ft.TextField(
-            label="Notion API Key",
-            password=True,
-            width=400,
-            value=proxy.config.get("notion_api_key", "") or os.getenv("NOTION_API_KEY", "")
-        )
-
-        self.database_id_field = ft.TextField(
-            label="Database ID",
-            width=400,
-            value=proxy.config.get("notion_database_id", "") or os.getenv("NOTION_DATABASE_ID", "1d254e6206d881bb9e88d2e7ffb90444")
-        )
-
-        # 設定保存ボタン
-        self.save_config_btn = ft.ElevatedButton(
-            "設定を保存",
-            icon=ft.Icons.SAVE,
-            on_click=self.save_notion_config
-        )
-
         # 年選択
         current_year = datetime.now().year
         self.year_dropdown = ft.Dropdown(
@@ -89,23 +68,14 @@ class ExportTab:
         # プログレスバー
         self.progress = ft.ProgressBar(visible=False)
 
-    def save_notion_config(self, e):
-        """Notion設定を保存"""
-        try:
-            self.proxy.config["notion_api_key"] = self.api_key_field.value
-            self.proxy.config["notion_database_id"] = self.database_id_field.value
-            self.proxy.save_config()
-            self.show_snackbar("Notion設定を保存しました", ft.Colors.GREEN)
-        except Exception as ex:
-            self.show_snackbar(f"設定の保存に失敗しました: {str(ex)}", ft.Colors.RED)
-
     def fetch_data(self, e):
         """Notionからデータを取得"""
-        api_key = self.api_key_field.value
-        database_id = self.database_id_field.value
+        # 設定タブから読み込み
+        api_key = self.proxy.config.get("notion_api_key", "")
+        database_id = self.proxy.config.get("notion_database_id", "")
 
         if not api_key or not database_id:
-            self.show_snackbar("API KeyとDatabase IDを入力してください", ft.Colors.RED)
+            self.show_snackbar("設定タブでNotion API KeyとDatabase IDを設定してください", ft.Colors.RED)
             return
 
         self.progress.visible = True
@@ -333,22 +303,6 @@ class ExportTab:
             content=ft.Container(
                 padding=ft.padding.all(20),
                 content=ft.Column([
-                    # Notion設定カード
-                    ft.Card(
-                        content=ft.Container(
-                            padding=ft.padding.all(20),
-                            content=ft.Column([
-                                ft.Text("Notion設定", size=18, weight=ft.FontWeight.BOLD),
-                                ft.Divider(),
-                                self.api_key_field,
-                                self.database_id_field,
-                                ft.Container(
-                                    padding=ft.padding.only(top=10),
-                                    content=self.save_config_btn
-                                ),
-                            ])
-                        )
-                    ),
                     # 期間選択カード
                     ft.Card(
                         content=ft.Container(
