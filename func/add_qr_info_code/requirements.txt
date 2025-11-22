@@ -1,0 +1,6 @@
+functions-framework>=3.4.0
+Flask>=3.0.0
+notion-client
+google-cloud-storage
+Pillow      # (PIL)
+qrcode      # qrcode[pil] でも可
