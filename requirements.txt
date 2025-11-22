@@ -1,0 +1,14 @@
+# Streamlit app (app.py)
+streamlit>=1.28.0
+pandas>=2.0.0
+notion-client>=2.0.0
+python-dotenv>=1.0.0
+openpyxl>=3.1.0
+
+# Cloud Functions (func/)
+functions-framework>=3.0.0
+Flask>=3.0.0
+google-cloud-storage>=2.0.0
+qrcode[pil]>=7.0.0
+Pillow>=9.0.0,<10.0.0
+Werkzeug>=2.2.0,<3.0.0
