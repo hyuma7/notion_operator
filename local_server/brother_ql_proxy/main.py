@@ -5,7 +5,7 @@ Brother QL プリンタープロキシ - メインアプリケーション
 
 import flet as ft
 from .core import PrinterProxy
-from .ui import create_status_tab, create_config_tab, create_log_tab
+from .ui import create_status_tab, create_config_tab, create_log_tab, create_export_tab
 from .web import create_flask_app
 
 
@@ -29,12 +29,13 @@ def main(page: ft.Page):
     status_tab, status_component = create_status_tab(proxy, page)
     config_tab, config_component = create_config_tab(proxy, page)
     log_tab, log_component = create_log_tab(proxy, page)
-    
+    export_tab, export_component = create_export_tab(proxy, page)
+
     # メインタブコンテナ
     tabs = ft.Tabs(
         selected_index=0,
         animation_duration=300,
-        tabs=[status_tab, config_tab, log_tab],
+        tabs=[status_tab, config_tab, log_tab, export_tab],
         expand=True
     )
     
