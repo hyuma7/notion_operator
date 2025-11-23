@@ -1,62 +1,71 @@
-# notion_operator
+# Brother QL プリンタープロキシサーバー
 
-NotionのAPIとPythonを使用して各種業務を自動化するためのリポジトリです。
+ローカルネットワーク内のBrother QLプリンターをインターネット経由でアクセス可能にするプロキシサーバーです。
 
-## 機能一覧
+## 必要な環境
 
-### メインアプリ: Brother QL プリンター連携 (local_server/)
-- ローカルプロキシサーバー
-- ラベル印刷機能
-- Notion連携・データエクスポート
-- Flet UIで操作
-
-### Cloud Functions (func/)
-- QRコード生成・Notionページ追加
-- サーバーレス実行
-
-## 技術スタック
-
-- **言語**: Python 3.10+
-- **UI**: Flet
-- **API**: Notion API, Flask
-- **クラウド**: Google Cloud Platform (Cloud Functions, Cloud Storage)
-
-## プロジェクト構造
-
-```
-notion_operator/
-├── local_server/           # メインアプリ
-│   ├── run_proxy.py        # エントリポイント
-│   ├── brother_ql_proxy/   # プリンター連携コード
-│   └── requirements.txt
-├── func/                   # Cloud Functions
-│   ├── add_qr_info_code/
-│   └── qr_print/
-├── flat_export/            # エクスポート関連
-├── docs/                   # ドキュメント
-└── requirements.txt        # 全体の依存関係
-```
+- Python 3.8以上
 
 ## セットアップ
 
-1. 依存関係のインストール
+### 1. 依存関係のインストール
+
 ```bash
 pip install -r requirements.txt
 ```
 
-2. 環境変数の設定
+または個別にインストール:
 ```bash
-NOTION_API_KEY=your_api_key
-NOTION_DATABASE_ID=your_database_id
+pip install flet flask flask-cors requests Pillow qrcode pystray pyngrok werkzeug notion-client pandas openpyxl
 ```
 
-3. アプリの起動
+### 2. アプリケーションの起動
+
 ```bash
 cd local_server
 python run_proxy.py
 ```
 
-詳細は `local_server/README.md` と `local_server/SETUP.md` を参照してください。
+## 使用方法
+
+### ステータスタブ
+- サーバーの開始/停止
+- プリンター接続状態の確認
+- Webインターフェースへのアクセス
+
+### 設定タブ
+- プリンターIP/ポートの設定
+- プロキシサーバーポートの設定
+- ngrok設定（外部アクセス用）
+
+### ログタブ
+- システムの動作ログを確認
+
+### エクスポートタブ
+- Notion連携・データエクスポート
+
+## API エンドポイント
+
+- `GET /` - Webインターフェース
+- `GET /status` - ステータス確認
+- `POST /print/raw` - 生データ印刷
+- `POST /print/label` - ラベル印刷
+
+## トラブルシューティング
+
+### プリンターに接続できない
+1. プリンターのIPアドレスが正しいか確認
+2. プリンターとPCが同じネットワークにあるか確認
+3. ファイアウォールでポート9100がブロックされていないか確認
+
+### ngrokが動作しない
+1. ngrok認証トークンが正しく設定されているか確認
+2. pyngrokがインストールされているか確認
+
+### ImportError が発生する場合
+```bash
+python -m pip install --upgrade -r requirements.txt
+```
 
 ## ライセンス
 

@@ -1,4 +1,4 @@
-# Main app (local_server/brother_ql_proxy)
+# Brother QL Proxy
 flet>=0.19.0
 flask>=2.3.0
 flask-cors>=4.0.0
@@ -11,11 +11,4 @@ werkzeug>=2.3.0
 notion-client>=2.2.1
 pandas>=2.1.0
 openpyxl>=3.1.2
-
-# Cloud Functions (func/)
-functions-framework>=3.0.0
-google-cloud-storage>=2.0.0
-
-# Development
 python-dotenv>=1.0.0
-pyinstaller>=6.0.0
