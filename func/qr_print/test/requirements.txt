@@ -1,4 +1,0 @@
-notion-client
-functions-framework
-flask
-brother_ql
