@@ -9,3 +9,4 @@ ENV/
 *.log
 *.spec
 printer_proxy_config.json
+tests/data/

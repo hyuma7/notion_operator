@@ -538,22 +538,24 @@ class ExportTab:
                             ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
                             current_row += 1
 
+                        # 合計行（全体合算セクションの場合はスキップ）
+                        if section_name != '全体合算':
+                            ws.cell(row=current_row, column=1, value="合計")
+                            ws.cell(row=current_row, column=1).font = Font(bold=True)
+                            for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                col_total = pivot_df[month].sum()
+                                ws.cell(row=current_row, column=col_idx, value=col_total)
+                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
 
-                        # 合計行
-                        ws.cell(row=current_row, column=1, value="合計")
-                        ws.cell(row=current_row, column=1).font = Font(bold=True)
-                        for col_idx, month in enumerate(pivot_df.columns, start=2):
-                            col_total = pivot_df[month].sum()
-                            ws.cell(row=current_row, column=col_idx, value=col_total)
-                            ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
-                            ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                            # 合計の計列
+                            grand_total = pivot_df.values.sum()
+                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=grand_total)
+                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                            current_row += 1
 
-                        # 合計の計列
-                        grand_total = pivot_df.values.sum()
-                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=grand_total)
-                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
-                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
-                        current_row += 2  # セクション間に空行
+                        current_row += 1  # セクション間に空行
 
                     # 列幅調整
                     ws.column_dimensions['A'].width = 20
