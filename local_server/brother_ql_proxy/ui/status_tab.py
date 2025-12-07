@@ -25,7 +25,7 @@ class StatusTab:
             bgcolor=ft.Colors.GREEN,
             color=ft.Colors.WHITE
         )
-        
+
         self.stop_btn = ft.ElevatedButton(
             "サーバー停止",
             icon=ft.Icons.STOP,
@@ -34,7 +34,7 @@ class StatusTab:
             color=ft.Colors.WHITE,
             disabled=True
         )
-        
+
         self.test_btn = ft.ElevatedButton(
             "接続テスト",
             icon=ft.Icons.WIFI,

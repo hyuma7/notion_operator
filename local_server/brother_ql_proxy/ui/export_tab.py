@@ -19,6 +19,7 @@ from io import BytesIO
 
 class ExportTab:
     def __init__(self, proxy, page: ft.Page):
+        print("=== ExportTab 初期化開始 ===")  # デバッグ
         self.proxy = proxy
         self.page = page
         self.df = None
@@ -28,6 +29,7 @@ class ExportTab:
         self.pivot_df = None  # ピボット集計用データ
         self.pivot_start_year_value = None  # ピボット集計の開始年
         self.pivot_start_month_value = None  # ピボット集計の開始月
+        print("=== ExportTab 初期化完了 ===")  # デバッグ
 
         # 財務集計用の開始年月選択
         self.pivot_start_year = ft.Dropdown(
@@ -74,16 +76,24 @@ class ExportTab:
 
     def fetch_pivot_data(self, e):
         """財務集計データを取得（選択した開始月から12ヶ月分）"""
+        print("=== fetch_pivot_data が呼び出されました ===")  # デバッグ
+
         api_key = self.proxy.config.get("notion_api_key", "")
         database_id = self.proxy.config.get("notion_database_id", "")
 
+        print(f"API Key: {'設定済み' if api_key else '未設定'}")  # デバッグ
+        print(f"Database ID: {'設定済み' if database_id else '未設定'}")  # デバッグ
+
         if not api_key or not database_id:
+            print("API KeyまたはDatabase IDが未設定")  # デバッグ
             self.show_snackbar("設定タブでNotion API KeyとDatabase IDを設定してください", ft.Colors.RED)
             return
 
         self.progress.visible = True
         self.result_text.value = "財務集計データを取得中..."
         self.page.update()
+
+        print("データ取得を開始します...")  # デバッグ
 
         try:
             notion = Client(auth=api_key)
@@ -155,6 +165,7 @@ class ExportTab:
 
             # 企業別仕入高用：全データを取得（在庫状況不問、Created time基準）
             # ※仕入高は在庫状況に関係なく、登録された全商品の仕入原価を集計
+            # Created timeはシステムプロパティのためフィルタできないので、全件取得後にフィルタ
             all_purchase_results = []
             has_more = True
             start_cursor = None
@@ -162,13 +173,6 @@ class ExportTab:
             while has_more:
                 query_params = {
                     "database_id": database_id,
-                    "filter": {
-                        "property": "Created time",
-                        "date": {
-                            "on_or_after": start_date,
-                            "before": end_date
-                        }
-                    },
                     "page_size": 100
                 }
 
@@ -180,11 +184,30 @@ class ExportTab:
                 has_more = results.get("has_more", False)
                 start_cursor = results.get("next_cursor")
 
+            print(f"全データ取得完了: {len(all_purchase_results)}件")  # デバッグ
+
             # 仕入データをDataFrameに変換
             purchase_combined_results = {
                 "results": all_purchase_results
             }
             self.pivot_purchase_df = self.parse_notion_results(purchase_combined_results)
+
+            # Created timeでフィルタリング（取得後）
+            if not self.pivot_purchase_df.empty and 'Created time' in self.pivot_purchase_df.columns:
+                # Created timeを日付型に変換（UTC）
+                self.pivot_purchase_df['Created time'] = pd.to_datetime(
+                    self.pivot_purchase_df['Created time'],
+                    errors='coerce',
+                    utc=True
+                )
+                # 期間でフィルタ（UTCに変換して比較）
+                start_dt = pd.to_datetime(start_date, utc=True)
+                end_dt = pd.to_datetime(end_date, utc=True)
+                self.pivot_purchase_df = self.pivot_purchase_df[
+                    (self.pivot_purchase_df['Created time'] >= start_dt) &
+                    (self.pivot_purchase_df['Created time'] < end_dt)
+                ]
+                print(f"期間フィルタ後: {len(self.pivot_purchase_df)}件")  # デバッグ
 
             if not self.pivot_df.empty:
                 # 開始年月を保存
@@ -205,6 +228,9 @@ class ExportTab:
                 self.export_pivot_btn.disabled = True
 
         except Exception as ex:
+            import traceback
+            error_detail = traceback.format_exc()
+            print(f"財務集計データ取得エラー:\n{error_detail}")  # デバッグ用
             self.result_text.value = f"❌ エラー: {str(ex)}"
             self.export_pivot_btn.disabled = True
 
@@ -496,61 +522,14 @@ class ExportTab:
             fees_by_month[month] = month_data['販売手数料_数値'].sum()
             shipping_by_month[month] = month_data['送料_数値'].sum()
 
-        # 全体合算表を作成
-        summary_data = {
-            '内訳': ['売上', '原価', '粗利', '販売手数料', '送料', '販売利益']
-        }
-
-        for month in months:
-            # 各月の合計を計算
-            total_sales = pivot_list[0][month].sum() + pivot_list[2][month].sum()  # 業販売上 + 小売売上
-            total_cost = pivot_list[4][month].sum()  # 仕入高（原価）
-            gross_profit = total_sales - total_cost  # 粗利
-            total_fees = fees_by_month.get(month, 0)  # 販売手数料
-            total_shipping = shipping_by_month.get(month, 0)  # 送料
-            net_profit = gross_profit - total_fees - total_shipping  # 販売利益
-
-            summary_data[month] = [
-                total_sales,      # 売上
-                total_cost,       # 原価
-                gross_profit,     # 粗利
-                total_fees,       # 販売手数料
-                total_shipping,   # 送料
-                net_profit        # 販売利益
-            ]
-
-        summary_df = pd.DataFrame(summary_data)
-        summary_df = summary_df.set_index('内訳')
-
-        # 仕入先と販売先を統合したリストを作成
-        all_companies = set()
-        all_companies.update(pivot_list[0].index)  # 仕入先
-        all_companies.update(pivot_list[2].index)  # 販売媒体
-
-        # 「不明」を除外
-        all_companies.discard('不明')
-        all_companies = sorted(list(all_companies))
-
-        # 統合された企業別データを作成
-        combined_data = {}
-        for company in all_companies:
-            combined_data[company] = {}
-            for month in months:
-                # 仕入先としての売上（業販売上）
-                wholesale_sales = pivot_list[0].loc[company, month] if company in pivot_list[0].index else 0
-                # 販売媒体としての売上（小売売上）
-                retail_sales = pivot_list[2].loc[company, month] if company in pivot_list[2].index else 0
-                # 合計売上
-                combined_data[company][month] = wholesale_sales + retail_sales
-
-        # DataFrameに変換
-        combined_sales_df = pd.DataFrame(combined_data).T
-        combined_sales_df = combined_sales_df[months]  # 月の順序を保持
-
+        # 5つのセクションを返す
+        # 画像の順序に従って：業販売上、業販利益、小売売上、小売利益、仕入高
         return {
-            '全体合算': summary_df,
-            '仕入先・売上先別': combined_sales_df,
-            '企業別仕入高': pivot_list[4]
+            '企業別売上（業販）': pivot_list[0],      # 仕入先 × 売上金
+            '企業別販売利益（業販）': pivot_list[1],  # 仕入先 × 純利益
+            '企業別売上（小売）': pivot_list[2],      # 販売媒体 × 売上金
+            '企業別販売利益（小売）': pivot_list[3],  # 販売媒体 × 純利益
+            '企業別仕入高': pivot_list[4]             # 仕入先 × 仕入れ原価（全データ）
         }
 
     def export_pivot_excel(self, e):
@@ -583,12 +562,173 @@ class ExportTab:
                         self.pivot_purchase_df if hasattr(self, 'pivot_purchase_df') else None
                     )
 
+                    # 全体合算データを作成
+                    summary_data = None
+                    if not self.pivot_df.empty:
+                        import re
+                        from datetime import datetime
+
+                        # 月リストを生成
+                        months = []
+                        current_year = self.pivot_start_year_value
+                        current_month = self.pivot_start_month_value
+                        for i in range(12):
+                            months.append(f"{current_year}年{current_month}月")
+                            current_month += 1
+                            if current_month > 12:
+                                current_month = 1
+                                current_year += 1
+
+                        # データクリーニング関数
+                        def clean_currency(value):
+                            if pd.isna(value) or value == "":
+                                return 0
+                            if isinstance(value, (int, float)):
+                                return float(value)
+                            if isinstance(value, str):
+                                value = value.replace('￥', '').replace(',', '').strip()
+                                try:
+                                    return float(value)
+                                except:
+                                    return 0
+                            return 0
+
+                        # 売却日から年月を抽出
+                        def extract_year_month(date_str):
+                            if pd.isna(date_str) or date_str == "":
+                                return None
+                            try:
+                                date_obj = pd.to_datetime(date_str)
+                                return f"{date_obj.year}年{date_obj.month}月"
+                            except:
+                                return None
+
+                        df_temp = self.pivot_df.copy()
+                        df_temp['売却年月'] = df_temp['売却日'].apply(extract_year_month)
+                        df_temp['売上金_数値'] = df_temp['売上金'].apply(clean_currency)
+                        df_temp['仕入れ原価_数値'] = df_temp['仕入れ原価'].apply(clean_currency)
+                        df_temp['販売手数料_数値'] = df_temp['販売手数料'].apply(clean_currency)
+                        df_temp['送料_数値'] = df_temp['送料'].apply(clean_currency)
+                        df_temp['純利益_数値'] = df_temp['純利益'].apply(clean_currency)
+
+                        summary_rows = {}
+                        for month in months:
+                            month_data = df_temp[df_temp['売却年月'] == month]
+                            summary_rows.setdefault('売上', {})[month] = month_data['売上金_数値'].sum()
+                            summary_rows.setdefault('原価', {})[month] = month_data['仕入れ原価_数値'].sum()
+                            summary_rows.setdefault('販売手数料', {})[month] = month_data['販売手数料_数値'].sum()
+                            summary_rows.setdefault('送料', {})[month] = month_data['送料_数値'].sum()
+                            summary_rows.setdefault('販売利益', {})[month] = month_data['純利益_数値'].sum()
+                            summary_rows.setdefault('粗利', {})[month] = summary_rows['売上'][month] - summary_rows['原価'][month]
+
+                        summary_data = pd.DataFrame(summary_rows).T
+                        summary_data = summary_data.reindex(['売上', '原価', '粗利', '販売手数料', '送料', '販売利益'])
+                        summary_data = summary_data[months]
+
+                    # 担当者→企業リストのマッピングを作成
+                    assignee_company_mapping = {}
+
+                    # 売却済みデータから作業担当を取得
+                    if '作業担当' in self.pivot_df.columns:
+                        import re
+
+                        # 仕入先の担当者グループ化
+                        for _, row in self.pivot_df[['仕入れ先', '作業担当']].drop_duplicates().iterrows():
+                            supplier = row['仕入れ先']
+                            assignee = row['作業担当']
+                            if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
+                                # URL除去してクリーン名を取得
+                                clean_name = supplier
+                                if isinstance(supplier, str) and '(https://' in supplier:
+                                    clean_name = re.sub(r'\s*\(https://.*?\)', '', supplier).strip()
+
+                                if assignee not in assignee_company_mapping:
+                                    assignee_company_mapping[assignee] = []
+                                if clean_name not in assignee_company_mapping[assignee]:
+                                    assignee_company_mapping[assignee].append(clean_name)
+
+                        # 販売媒体の担当者グループ化
+                        for _, row in self.pivot_df[['販売媒体', '作業担当']].drop_duplicates().iterrows():
+                            channel = row['販売媒体']
+                            assignee = row['作業担当']
+                            if pd.notna(channel) and channel and channel != '不明' and pd.notna(assignee):
+                                # URL除去してクリーン名を取得
+                                clean_name = channel
+                                if isinstance(channel, str) and '(https://' in channel:
+                                    clean_name = re.sub(r'\s*\(https://.*?\)', '', channel).strip()
+
+                                if assignee not in assignee_company_mapping:
+                                    assignee_company_mapping[assignee] = []
+                                if clean_name not in assignee_company_mapping[assignee]:
+                                    assignee_company_mapping[assignee].append(clean_name)
+
                     # Excelワークブックを作成
                     wb = Workbook()
                     ws = wb.active
                     ws.title = "財務集計"
 
                     current_row = 1
+
+                    # 色の定義
+                    header_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")  # 灰色
+                    total_fill = PatternFill(start_color="FFE4B5", end_color="FFE4B5", fill_type="solid")  # 薄橙色
+
+                    # 担当者ごとの色パターン（6色）
+                    assignee_colors = [
+                        PatternFill(start_color="E6F3FF", end_color="E6F3FF", fill_type="solid"),  # 薄青
+                        PatternFill(start_color="FFE6F0", end_color="FFE6F0", fill_type="solid"),  # 薄ピンク
+                        PatternFill(start_color="E6FFE6", end_color="E6FFE6", fill_type="solid"),  # 薄緑
+                        PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid"),  # 薄オレンジ
+                        PatternFill(start_color="F0E6FF", end_color="F0E6FF", fill_type="solid"),  # 薄紫
+                        PatternFill(start_color="FFFFE6", end_color="FFFFE6", fill_type="solid"),  # 薄黄色
+                    ]
+
+                    # 全体合算セクションを最初に書き込み
+                    if summary_data is not None and not summary_data.empty:
+                        # セクションタイトル
+                        ws.cell(row=current_row, column=1, value="全体合算")
+                        ws.cell(row=current_row, column=1).font = Font(bold=True, size=14)
+                        current_row += 1
+
+                        # ヘッダー行（月の列） - 灰色背景
+                        ws.cell(row=current_row, column=1, value="内訳")
+                        ws.cell(row=current_row, column=1).fill = header_fill
+                        ws.cell(row=current_row, column=1).font = Font(bold=True)
+                        for col_idx, month in enumerate(summary_data.columns, start=2):
+                            ws.cell(row=current_row, column=col_idx, value=month)
+                            ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                            ws.cell(row=current_row, column=col_idx).alignment = Alignment(horizontal='center')
+                            ws.cell(row=current_row, column=col_idx).fill = header_fill
+
+                        # 「計」列 - 灰色背景
+                        ws.cell(row=current_row, column=len(summary_data.columns) + 2, value="計")
+                        ws.cell(row=current_row, column=len(summary_data.columns) + 2).font = Font(bold=True)
+                        ws.cell(row=current_row, column=len(summary_data.columns) + 2).alignment = Alignment(horizontal='center')
+                        ws.cell(row=current_row, column=len(summary_data.columns) + 2).fill = header_fill
+                        current_row += 1
+
+                        # データ行
+                        for item_name in summary_data.index:
+                            ws.cell(row=current_row, column=1, value=item_name)
+                            ws.cell(row=current_row, column=1).fill = total_fill
+                            ws.cell(row=current_row, column=1).font = Font(bold=True)
+                            row_total = 0
+                            for col_idx, month in enumerate(summary_data.columns, start=2):
+                                value = summary_data.loc[item_name, month]
+                                ws.cell(row=current_row, column=col_idx, value=value)
+                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                ws.cell(row=current_row, column=col_idx).fill = total_fill
+                                ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                row_total += value
+
+                            # 計列
+                            ws.cell(row=current_row, column=len(summary_data.columns) + 2, value=row_total)
+                            ws.cell(row=current_row, column=len(summary_data.columns) + 2).number_format = '#,##0'
+                            ws.cell(row=current_row, column=len(summary_data.columns) + 2).fill = total_fill
+                            ws.cell(row=current_row, column=len(summary_data.columns) + 2).font = Font(bold=True)
+                            current_row += 1
+
+                        current_row += 1  # 全体合算と各セクションの間に空行
 
                     # 各セクションを順番に書き込み
                     for section_name, pivot_df in sections.items():
@@ -597,50 +737,102 @@ class ExportTab:
                         ws.cell(row=current_row, column=1).font = Font(bold=True, size=14)
                         current_row += 1
 
-                        # ヘッダー行（月の列）
+                        # ヘッダー行（月の列） - 灰色背景
                         ws.cell(row=current_row, column=1, value="")  # 左上は空欄
+                        ws.cell(row=current_row, column=1).fill = header_fill
                         for col_idx, month in enumerate(pivot_df.columns, start=2):
                             ws.cell(row=current_row, column=col_idx, value=month)
                             ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
                             ws.cell(row=current_row, column=col_idx).alignment = Alignment(horizontal='center')
+                            ws.cell(row=current_row, column=col_idx).fill = header_fill
 
-                        # 「計」列
+                        # 「計」列 - 灰色背景
                         ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value="計")
                         ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
                         ws.cell(row=current_row, column=len(pivot_df.columns) + 2).alignment = Alignment(horizontal='center')
+                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = header_fill
                         current_row += 1
 
-                        # データ行
-                        for company in pivot_df.index:
-                            ws.cell(row=current_row, column=1, value=company)
-                            row_total = 0
-                            for col_idx, month in enumerate(pivot_df.columns, start=2):
-                                value = pivot_df.loc[company, month]
-                                ws.cell(row=current_row, column=col_idx, value=value)
-                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
-                                row_total += value
+                        # 担当者ごとにグループ化して表示
+                        if assignee_company_mapping:
+                            assignee_idx = 0
+                            for assignee, companies in sorted(assignee_company_mapping.items()):
+                                # 担当者の色を選択（循環）
+                                assignee_fill = assignee_colors[assignee_idx % len(assignee_colors)]
+                                assignee_idx += 1
 
-                            # 計列
-                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
-                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
-                            current_row += 1
+                                # その担当者の企業データを表示 + 小計の計算
+                                assignee_subtotal_by_month = {month: 0 for month in pivot_df.columns}
+                                assignee_grand_total = 0
 
-                        # 合計行（全体合算セクションの場合はスキップ）
-                        if section_name != '全体合算':
-                            ws.cell(row=current_row, column=1, value="合計")
-                            ws.cell(row=current_row, column=1).font = Font(bold=True)
-                            for col_idx, month in enumerate(pivot_df.columns, start=2):
-                                col_total = pivot_df[month].sum()
-                                ws.cell(row=current_row, column=col_idx, value=col_total)
-                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
-                                ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                for company in companies:
+                                    if company in pivot_df.index:
+                                        ws.cell(row=current_row, column=1, value=company)
+                                        row_total = 0
+                                        for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                            value = pivot_df.loc[company, month]
+                                            ws.cell(row=current_row, column=col_idx, value=value)
+                                            ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                            row_total += value
+                                            assignee_subtotal_by_month[month] += value
 
-                            # 合計の計列
-                            grand_total = pivot_df.values.sum()
-                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=grand_total)
-                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
-                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
-                            current_row += 1
+                                        # 計列
+                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
+                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                        assignee_grand_total += row_total
+                                        current_row += 1
+
+                                # 担当者の小計行（担当者名+粗利計）
+                                ws.cell(row=current_row, column=1, value=f"{assignee}粗利計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = assignee_fill
+                                for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                    subtotal_value = assignee_subtotal_by_month[month]
+                                    ws.cell(row=current_row, column=col_idx, value=subtotal_value)
+                                    ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                    ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                    ws.cell(row=current_row, column=col_idx).fill = assignee_fill
+
+                                # 小計の計列
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=assignee_grand_total)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = assignee_fill
+                                current_row += 1
+                        else:
+                            # 担当者マッピングがない場合は従来通り企業を表示
+                            for company in pivot_df.index:
+                                ws.cell(row=current_row, column=1, value=company)
+                                row_total = 0
+                                for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                    value = pivot_df.loc[company, month]
+                                    ws.cell(row=current_row, column=col_idx, value=value)
+                                    ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                    row_total += value
+
+                                # 計列
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                current_row += 1
+
+                        # 合計行（薄橙色背景）
+                        ws.cell(row=current_row, column=1, value="合計")
+                        ws.cell(row=current_row, column=1).font = Font(bold=True)
+                        ws.cell(row=current_row, column=1).fill = total_fill
+                        for col_idx, month in enumerate(pivot_df.columns, start=2):
+                            col_total = pivot_df[month].sum()
+                            ws.cell(row=current_row, column=col_idx, value=col_total)
+                            ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                            ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                            ws.cell(row=current_row, column=col_idx).fill = total_fill
+
+                        # 合計の計列
+                        grand_total = pivot_df.values.sum()
+                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=grand_total)
+                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = total_fill
+                        current_row += 1
 
                         current_row += 1  # セクション間に空行
 

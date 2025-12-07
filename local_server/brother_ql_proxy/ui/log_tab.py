@@ -25,7 +25,7 @@ class LogTab:
     def add_log(self, message: str):
         """ログを追加"""
         timestamp = datetime.now().strftime('%H:%M:%S')
-        
+
         # ログレベルによって色を変更
         bgcolor = ft.Colors.GREY_100
         if "[ERROR]" in message:
