@@ -330,6 +330,8 @@ class ExportTab:
         df_clean['売上金_数値'] = df_clean['売上金'].apply(clean_currency)
         df_clean['純利益_数値'] = df_clean['純利益'].apply(clean_currency)
         df_clean['仕入れ原価_数値'] = df_clean['仕入れ原価'].apply(clean_currency)
+        df_clean['販売手数料_数値'] = df_clean['販売手数料'].apply(clean_currency)
+        df_clean['送料_数値'] = df_clean['送料'].apply(clean_currency)
 
         # 仕入先と販売媒体のクリーニング（Notion URLを除去）
         def clean_company_name(value):
@@ -399,11 +401,69 @@ class ExportTab:
             # 月の順序で並べ替え
             pivot_list[i] = pivot[months]
 
+        # 販売手数料と送料の月別集計
+        fees_by_month = {}
+        shipping_by_month = {}
+
+        for month in months:
+            month_data = df_clean[df_clean['売却年月'] == month]
+            fees_by_month[month] = month_data['販売手数料_数値'].sum()
+            shipping_by_month[month] = month_data['送料_数値'].sum()
+
+        # 全体合算表を作成
+        summary_data = {
+            '内訳': ['売上', '原価', '粗利', '販売手数料', '送料', '販売利益']
+        }
+
+        for month in months:
+            # 各月の合計を計算
+            total_sales = pivot_list[0][month].sum() + pivot_list[2][month].sum()  # 業販売上 + 小売売上
+            total_cost = pivot_list[4][month].sum()  # 仕入高（原価）
+            gross_profit = total_sales - total_cost  # 粗利
+            total_fees = fees_by_month.get(month, 0)  # 販売手数料
+            total_shipping = shipping_by_month.get(month, 0)  # 送料
+            net_profit = gross_profit - total_fees - total_shipping  # 販売利益
+
+            summary_data[month] = [
+                total_sales,      # 売上
+                total_cost,       # 原価
+                gross_profit,     # 粗利
+                total_fees,       # 販売手数料
+                total_shipping,   # 送料
+                net_profit        # 販売利益
+            ]
+
+        summary_df = pd.DataFrame(summary_data)
+        summary_df = summary_df.set_index('内訳')
+
+        # 仕入先と販売先を統合したリストを作成
+        all_companies = set()
+        all_companies.update(pivot_list[0].index)  # 仕入先
+        all_companies.update(pivot_list[2].index)  # 販売媒体
+
+        # 「不明」を除外
+        all_companies.discard('不明')
+        all_companies = sorted(list(all_companies))
+
+        # 統合された企業別データを作成
+        combined_data = {}
+        for company in all_companies:
+            combined_data[company] = {}
+            for month in months:
+                # 仕入先としての売上（業販売上）
+                wholesale_sales = pivot_list[0].loc[company, month] if company in pivot_list[0].index else 0
+                # 販売媒体としての売上（小売売上）
+                retail_sales = pivot_list[2].loc[company, month] if company in pivot_list[2].index else 0
+                # 合計売上
+                combined_data[company][month] = wholesale_sales + retail_sales
+
+        # DataFrameに変換
+        combined_sales_df = pd.DataFrame(combined_data).T
+        combined_sales_df = combined_sales_df[months]  # 月の順序を保持
+
         return {
-            '企業別売上（業販）': pivot_list[0],
-            '企業別販売利益（業販）': pivot_list[1],
-            '企業別売上（小売）': pivot_list[2],
-            '企業別販売利益（小売）': pivot_list[3],
+            '全体合算': summary_df,
+            '仕入先・売上先別': combined_sales_df,
             '企業別仕入高': pivot_list[4]
         }
 
@@ -478,10 +538,6 @@ class ExportTab:
                             ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
                             current_row += 1
 
-                        # 担当者行（空欄）
-                        ws.cell(row=current_row, column=1, value="担当者")
-                        ws.cell(row=current_row, column=1).font = Font(bold=True)
-                        current_row += 1
 
                         # 合計行
                         ws.cell(row=current_row, column=1, value="合計")
