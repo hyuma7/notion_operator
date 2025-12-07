@@ -135,8 +135,13 @@ def create_test_excel():
     df_clean['送料'] = df_clean['送料'].apply(clean_currency)
     df_clean['純利益'] = df_clean['純利益'].apply(clean_currency)
 
-    # 売却年月を抽出
-    df_clean['売却年月'] = pd.to_datetime(df_clean['売却日']).apply(
+    # 売却年月を抽出（売却済みのみ）
+    df_clean['売却年月'] = pd.to_datetime(df_clean['売却日'], errors='coerce').apply(
+        lambda x: f"{x.year}年{x.month}月" if pd.notna(x) else None
+    )
+
+    # 登録年月を抽出（Created time代わり、仕入高計算用）
+    df_clean['登録年月'] = pd.to_datetime(df_clean['登録日'], errors='coerce').apply(
         lambda x: f"{x.year}年{x.month}月" if pd.notna(x) else None
     )
 
@@ -158,11 +163,14 @@ def create_test_excel():
             current_month = 1
             current_year += 1
 
+    # 売却済みデータのみをフィルタ（売上・利益計算用）
+    df_sold = df_clean[df_clean['在庫状況'] == '売却済み'].copy()
+
     # ピボットテーブルを作成（5つ）
     pivot_list = []
 
-    # 1. 企業別売上（業販）- 仕入先 × 売上金
-    pivot1 = df_clean.pivot_table(
+    # 1. 企業別売上（業販）- 仕入先 × 売上金（売却済みのみ）
+    pivot1 = df_sold.pivot_table(
         values='売上金',
         index='仕入れ先',
         columns='売却年月',
@@ -170,8 +178,8 @@ def create_test_excel():
         fill_value=0
     )
 
-    # 2. 企業別販売利益（業販）- 仕入先 × 純利益
-    pivot2 = df_clean.pivot_table(
+    # 2. 企業別販売利益（業販）- 仕入先 × 純利益（売却済みのみ）
+    pivot2 = df_sold.pivot_table(
         values='純利益',
         index='仕入れ先',
         columns='売却年月',
@@ -179,8 +187,8 @@ def create_test_excel():
         fill_value=0
     )
 
-    # 3. 企業別売上（小売）- 販売媒体 × 売上金
-    pivot3 = df_clean.pivot_table(
+    # 3. 企業別売上（小売）- 販売媒体 × 売上金（売却済みのみ）
+    pivot3 = df_sold.pivot_table(
         values='売上金',
         index='販売媒体',
         columns='売却年月',
@@ -188,8 +196,8 @@ def create_test_excel():
         fill_value=0
     )
 
-    # 4. 企業別販売利益（小売）- 販売媒体 × 純利益
-    pivot4 = df_clean.pivot_table(
+    # 4. 企業別販売利益（小売）- 販売媒体 × 純利益（売却済みのみ）
+    pivot4 = df_sold.pivot_table(
         values='純利益',
         index='販売媒体',
         columns='売却年月',
@@ -197,11 +205,11 @@ def create_test_excel():
         fill_value=0
     )
 
-    # 5. 企業別仕入高 - 仕入先 × 仕入れ原価
+    # 5. 企業別仕入高 - 仕入先 × 仕入れ原価（全データ、登録年月基準）
     pivot5 = df_clean.pivot_table(
         values='仕入れ原価',
         index='仕入れ先',
-        columns='売却年月',
+        columns='登録年月',
         aggfunc='sum',
         fill_value=0
     )
@@ -215,13 +223,13 @@ def create_test_excel():
                 pivot[month] = 0
         pivot_list[i] = pivot[months]
 
-    # 全体合算の作成
+    # 全体合算の作成（売却済みデータのみ）
     summary_data = {
         '指標': ['売上', '原価', '粗利', '販売手数料', '送料', '販売利益']
     }
 
     for month in months:
-        month_data = df_clean[df_clean['売却年月'] == month]
+        month_data = df_sold[df_sold['売却年月'] == month]
         if len(month_data) > 0:
             売上 = month_data['売上金'].sum()
             原価 = month_data['仕入れ原価'].sum()
@@ -233,16 +241,7 @@ def create_test_excel():
         else:
             summary_data[month] = [0, 0, 0, 0, 0, 0]
 
-    # 計列を追加
-    summary_data['計'] = [
-        df_clean['売上金'].sum(),
-        df_clean['仕入れ原価'].sum(),
-        df_clean['売上金'].sum() - df_clean['仕入れ原価'].sum(),
-        df_clean['販売手数料'].sum(),
-        df_clean['送料'].sum(),
-        df_clean['純利益'].sum()
-    ]
-
+    # DataFrameを作成（計列は含めない、Excel出力時に追加する）
     summary_df = pd.DataFrame(summary_data)
     summary_df.set_index('指標', inplace=True)
 
@@ -253,12 +252,13 @@ def create_test_excel():
     all_companies.discard('不明')
     all_companies = sorted(list(all_companies))
 
+    # 仕入先・売上先別（計列は含めない、Excel出力時に追加する）
     combined_sales_data = {}
-    for month in months + ['計']:
+    for month in months:
         combined_sales_data[month] = []
 
     for company in all_companies:
-        for month in months + ['計']:
+        for month in months:
             # 仕入先として売上があるか
             supplier_sales = 0
             if company in pivot_list[0].index and month in pivot_list[0].columns:
@@ -282,13 +282,15 @@ def create_test_excel():
         '企業別仕入高': pivot_list[4]
     }
 
-    # ファイル名を生成
+    # ファイル名を生成（タイムスタンプ付き）
     end_month = start_month + 11
     end_year = start_year
     if end_month > 12:
         end_year = start_year + 1
         end_month = end_month - 12
-    filename = f"財務集計_{start_year}年{start_month}月-{end_year}年{end_month}月_テスト.xlsx"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"財務集計_{start_year}年{start_month}月-{end_year}年{end_month}月_テスト_{timestamp}.xlsx"
 
     output_path = os.path.join(os.path.dirname(__file__), 'data', filename)
 
@@ -297,10 +299,13 @@ def create_test_excel():
 
     print(f"[OK] Excelファイルを作成しました: {output_path}")
     print(f"\n統計情報:")
-    print(f"  総売上: {df_clean['売上金'].sum():,.0f}円")
-    print(f"  総原価: {df_clean['仕入れ原価'].sum():,.0f}円")
-    print(f"  総利益: {df_clean['純利益'].sum():,.0f}円")
+    print(f"  総売上（売却済み）: {df_sold['売上金'].sum():,.0f}円")
+    print(f"  総原価（売却済み）: {df_sold['仕入れ原価'].sum():,.0f}円")
+    print(f"  総利益（売却済み）: {df_sold['純利益'].sum():,.0f}円")
+    print(f"  総仕入原価（全在庫）: {df_clean['仕入れ原価'].sum():,.0f}円")
     print(f"  企業数: {len(all_companies)}社")
+    print(f"  売却済み件数: {len(df_sold)}件")
+    print(f"  全データ件数: {len(df_clean)}件")
     print(f"  期間: {start_year}年{start_month}月-{end_year}年{end_month}月")
 
 

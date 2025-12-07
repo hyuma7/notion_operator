@@ -105,7 +105,7 @@ class ExportTab:
             end_date = f"{end_year}-{end_month:02d}-01"
 
             # 売却済みデータを取得（ページネーション対応）
-            all_results = []
+            all_sold_results = []
             has_more = True
             start_cursor = None
 
@@ -141,17 +141,50 @@ class ExportTab:
                     query_params["start_cursor"] = start_cursor
 
                 results = notion.databases.query(**query_params)
-                all_results.extend(results["results"])
+                all_sold_results.extend(results["results"])
                 has_more = results.get("has_more", False)
                 start_cursor = results.get("next_cursor")
 
             # 全結果を辞書形式に変換
             combined_results = {
-                "results": all_results
+                "results": all_sold_results
             }
 
-            # データフレームに変換
+            # データフレームに変換（売却済みデータ）
             self.pivot_df = self.parse_notion_results(combined_results)
+
+            # 企業別仕入高用：全データを取得（在庫状況不問、Created time基準）
+            # ※仕入高は在庫状況に関係なく、登録された全商品の仕入原価を集計
+            all_purchase_results = []
+            has_more = True
+            start_cursor = None
+
+            while has_more:
+                query_params = {
+                    "database_id": database_id,
+                    "filter": {
+                        "property": "Created time",
+                        "date": {
+                            "on_or_after": start_date,
+                            "before": end_date
+                        }
+                    },
+                    "page_size": 100
+                }
+
+                if start_cursor:
+                    query_params["start_cursor"] = start_cursor
+
+                results = notion.databases.query(**query_params)
+                all_purchase_results.extend(results["results"])
+                has_more = results.get("has_more", False)
+                start_cursor = results.get("next_cursor")
+
+            # 仕入データをDataFrameに変換
+            purchase_combined_results = {
+                "results": all_purchase_results
+            }
+            self.pivot_purchase_df = self.parse_notion_results(purchase_combined_results)
 
             if not self.pivot_df.empty:
                 # 開始年月を保存
@@ -258,6 +291,10 @@ class ExportTab:
                 else:
                     row[prop_name] = str(prop_value.get(prop_type, ""))
 
+            # ページレベルのCreated timeを追加（仕入日として使用）
+            if "created_time" in page:
+                row["Created time"] = page["created_time"]
+
             data.append(row)
 
         return pd.DataFrame(data)
@@ -279,8 +316,15 @@ class ExportTab:
 
         self.data_table.rows = rows
 
-    def create_pivot_sections(self, df, start_year, start_month):
-        """5つのセクションのピボットテーブルを作成"""
+    def create_pivot_sections(self, df, start_year, start_month, purchase_df=None):
+        """5つのセクションのピボットテーブルを作成
+
+        Args:
+            df: 売却済みデータのDataFrame（売上・利益計算用）
+            start_year: 開始年
+            start_month: 開始月
+            purchase_df: 全データのDataFrame（仕入高計算用、在庫状況不問）
+        """
         from datetime import datetime
         import re
 
@@ -382,13 +426,55 @@ class ExportTab:
         )
 
         # セクション5: 企業別仕入高 - 仕入先別の仕入れ原価
-        pivot5 = df_clean.pivot_table(
-            values='仕入れ原価_数値',
-            index='仕入れ先_clean',
-            columns='売却年月',
-            aggfunc='sum',
-            fill_value=0
-        )
+        # 仕入高は在庫状況に関係なく全データから計算
+        if purchase_df is not None and not purchase_df.empty:
+            # 仕入データの前処理
+            purchase_clean = purchase_df.copy()
+
+            # Created timeから年月を抽出（仕入日として扱う）
+            def extract_created_month(row):
+                # Created timeはparse_notion_resultsで既に処理されている想定
+                # もしCreated timeフィールドがない場合は売却日を使う
+                if 'Created time' in row and pd.notna(row['Created time']):
+                    try:
+                        date_obj = pd.to_datetime(row['Created time'])
+                        return f"{date_obj.year}年{date_obj.month}月"
+                    except:
+                        pass
+                # フォールバック：売却日を使う
+                if '売却日' in row and pd.notna(row['売却日']):
+                    try:
+                        date_obj = pd.to_datetime(row['売却日'])
+                        return f"{date_obj.year}年{date_obj.month}月"
+                    except:
+                        pass
+                return None
+
+            purchase_clean['仕入年月'] = purchase_clean.apply(extract_created_month, axis=1)
+
+            # 仕入れ原価のクリーニング
+            purchase_clean['仕入れ原価_数値'] = purchase_clean['仕入れ原価'].apply(clean_currency)
+
+            # 仕入先のクリーニング
+            purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先'].apply(clean_company_name)
+
+            # ピボットテーブル作成
+            pivot5 = purchase_clean.pivot_table(
+                values='仕入れ原価_数値',
+                index='仕入れ先_clean',
+                columns='仕入年月',
+                aggfunc='sum',
+                fill_value=0
+            )
+        else:
+            # フォールバック：売却済みデータから計算（後方互換性）
+            pivot5 = df_clean.pivot_table(
+                values='仕入れ原価_数値',
+                index='仕入れ先_clean',
+                columns='売却年月',
+                aggfunc='sum',
+                fill_value=0
+            )
 
         # 月の列を正しい順序で並べ替え、存在しない月は0で埋める
         pivot_list = [pivot1, pivot2, pivot3, pivot4, pivot5]
@@ -493,7 +579,8 @@ class ExportTab:
                     sections = self.create_pivot_sections(
                         self.pivot_df,
                         self.pivot_start_year_value,
-                        self.pivot_start_month_value
+                        self.pivot_start_month_value,
+                        self.pivot_purchase_df if hasattr(self, 'pivot_purchase_df') else None
                     )
 
                     # Excelワークブックを作成
