@@ -19,7 +19,6 @@ from io import BytesIO
 
 class ExportTab:
     def __init__(self, proxy, page: ft.Page):
-        print("=== ExportTab 初期化開始 ===")  # デバッグ
         self.proxy = proxy
         self.page = page
         self.df = None
@@ -29,7 +28,6 @@ class ExportTab:
         self.pivot_df = None  # ピボット集計用データ
         self.pivot_start_year_value = None  # ピボット集計の開始年
         self.pivot_start_month_value = None  # ピボット集計の開始月
-        print("=== ExportTab 初期化完了 ===")  # デバッグ
 
         # 財務集計用の開始年月選択
         self.pivot_start_year = ft.Dropdown(
@@ -76,24 +74,16 @@ class ExportTab:
 
     def fetch_pivot_data(self, e):
         """財務集計データを取得（選択した開始月から12ヶ月分）"""
-        print("=== fetch_pivot_data が呼び出されました ===")  # デバッグ
-
         api_key = self.proxy.config.get("notion_api_key", "")
         database_id = self.proxy.config.get("notion_database_id", "")
 
-        print(f"API Key: {'設定済み' if api_key else '未設定'}")  # デバッグ
-        print(f"Database ID: {'設定済み' if database_id else '未設定'}")  # デバッグ
-
         if not api_key or not database_id:
-            print("API KeyまたはDatabase IDが未設定")  # デバッグ
             self.show_snackbar("設定タブでNotion API KeyとDatabase IDを設定してください", ft.Colors.RED)
             return
 
         self.progress.visible = True
         self.result_text.value = "財務集計データを取得中..."
         self.page.update()
-
-        print("データ取得を開始します...")  # デバッグ
 
         try:
             notion = Client(auth=api_key)
@@ -184,8 +174,6 @@ class ExportTab:
                 has_more = results.get("has_more", False)
                 start_cursor = results.get("next_cursor")
 
-            print(f"全データ取得完了: {len(all_purchase_results)}件")  # デバッグ
-
             # 仕入データをDataFrameに変換
             purchase_combined_results = {
                 "results": all_purchase_results
@@ -207,7 +195,6 @@ class ExportTab:
                     (self.pivot_purchase_df['Created time'] >= start_dt) &
                     (self.pivot_purchase_df['Created time'] < end_dt)
                 ]
-                print(f"期間フィルタ後: {len(self.pivot_purchase_df)}件")  # デバッグ
 
             if not self.pivot_df.empty:
                 # 開始年月を保存
@@ -228,9 +215,6 @@ class ExportTab:
                 self.export_pivot_btn.disabled = True
 
         except Exception as ex:
-            import traceback
-            error_detail = traceback.format_exc()
-            print(f"財務集計データ取得エラー:\n{error_detail}")  # デバッグ用
             self.result_text.value = f"❌ エラー: {str(ex)}"
             self.export_pivot_btn.disabled = True
 
@@ -284,14 +268,50 @@ class ExportTab:
                 elif prop_type == "rollup":
                     # ロールアップの結果を処理
                     rollup = prop_value.get("rollup", {})
-                    if rollup.get("type") == "array":
+                    rollup_type = rollup.get("type")
+
+                    if rollup_type == "array":
                         array_data = rollup.get("array", [])
                         if array_data:
-                            row[prop_name] = ", ".join([str(item) for item in array_data])
+                            # 配列の各要素を解析
+                            values = []
+                            for item in array_data:
+                                if isinstance(item, dict):
+                                    item_type = item.get("type")
+                                    # title型（企業名など）
+                                    if item_type == "title" and item.get("title"):
+                                        values.append(item["title"][0]["plain_text"] if item["title"] else "")
+                                    # rich_text型
+                                    elif item_type == "rich_text" and item.get("rich_text"):
+                                        values.append(item["rich_text"][0]["plain_text"] if item["rich_text"] else "")
+                                    # select型
+                                    elif item_type == "select" and item.get("select"):
+                                        values.append(item["select"]["name"])
+                                    # number型
+                                    elif item_type == "number":
+                                        values.append(str(item.get("number", "")))
+                                    # formula型（仕入れ先名、販売媒体名など）
+                                    elif item_type == "formula":
+                                        formula = item.get("formula", {})
+                                        formula_type = formula.get("type")
+                                        if formula_type == "string":
+                                            string_val = formula.get("string", "")
+                                            if string_val:
+                                                values.append(string_val)
+                                        elif formula_type == "number":
+                                            values.append(str(formula.get("number", "")))
+                                    else:
+                                        values.append(str(item))
+                                else:
+                                    values.append(str(item))
+                            row[prop_name] = ", ".join(filter(None, values))
                         else:
                             row[prop_name] = ""
-                    elif rollup.get("type") == "number":
+                    elif rollup_type == "number":
                         row[prop_name] = rollup.get("number", 0)
+                    elif rollup_type == "date":
+                        date_val = rollup.get("date")
+                        row[prop_name] = date_val["start"] if date_val else ""
                     else:
                         row[prop_name] = str(rollup)
                 elif prop_type == "relation":
@@ -301,7 +321,13 @@ class ExportTab:
                 elif prop_type == "people":
                     # ユーザー名を取得
                     people = prop_value.get("people", [])
-                    row[prop_name] = ", ".join([person.get("name", "") for person in people])
+                    names = []
+                    for person in people:
+                        # nameフィールドを取得（存在しない場合は空文字）
+                        name = person.get("name", "")
+                        if name:
+                            names.append(name)
+                    row[prop_name] = ", ".join(names)
                 elif prop_type == "files":
                     # ファイル名を取得
                     files = prop_value.get("files", [])
@@ -343,7 +369,7 @@ class ExportTab:
         self.data_table.rows = rows
 
     def create_pivot_sections(self, df, start_year, start_month, purchase_df=None):
-        """5つのセクションのピボットテーブルを作成
+        """3つのセクションのピボットテーブルを作成（業販+小売を統合）
 
         Args:
             df: 売却済みデータのDataFrame（売上・利益計算用）
@@ -403,7 +429,7 @@ class ExportTab:
         df_clean['販売手数料_数値'] = df_clean['販売手数料'].apply(clean_currency)
         df_clean['送料_数値'] = df_clean['送料'].apply(clean_currency)
 
-        # 仕入先と販売媒体のクリーニング（Notion URLを除去）
+        # 仕入先と販売媒体のクリーニング
         def clean_company_name(value):
             if pd.isna(value) or value == "":
                 return "不明"
@@ -412,46 +438,112 @@ class ExportTab:
                 value = re.sub(r'\s*\(https://.*?\)', '', value)
             return value.strip()
 
-        df_clean['仕入れ先_clean'] = df_clean['仕入れ先'].apply(clean_company_name)
-        df_clean['販売媒体_clean'] = df_clean['販売媒体'].apply(clean_company_name)
+        # カテゴリーのクリーニング（未設定は「小売」）
+        def clean_category(value):
+            if pd.isna(value) or value == "" or value == "不明":
+                return "小売"
+            value_str = str(value).strip()
+            if value_str in ["市場", "業販", "小売"]:
+                return value_str
+            return "小売"
 
-        # セクション1: 企業別売上（業販）- 仕入先別の売上金
-        pivot1 = df_clean.pivot_table(
+        # 仕入れ先名と販売媒体名を使用（ロールアップから取得した企業名）
+        df_clean['仕入れ先_clean'] = df_clean['仕入れ先名'].apply(clean_company_name)
+        df_clean['販売媒体_clean'] = df_clean['販売媒体名'].apply(clean_company_name)
+
+        # カテゴリー情報を取得（ロールアップから）
+        # 販売先カテゴリと仕入れ先カテゴリを使用（最後の「ー」なし）
+        if '販売先カテゴリ' in df_clean.columns:
+            df_clean['販売先カテゴリー_clean'] = df_clean['販売先カテゴリ'].apply(clean_category)
+        else:
+            df_clean['販売先カテゴリー_clean'] = "小売"
+
+        if '仕入れ先カテゴリ' in df_clean.columns:
+            df_clean['仕入れ先カテゴリー_clean'] = df_clean['仕入れ先カテゴリ'].apply(clean_category)
+        else:
+            df_clean['仕入れ先カテゴリー_clean'] = "小売"
+
+        # 統合データを作成（仕入先と販売媒体を統合）
+        # 仕入先データ
+        supplier_data = df_clean.copy()
+        supplier_data['企業名'] = supplier_data['仕入れ先_clean']
+        supplier_data['カテゴリー'] = supplier_data['仕入れ先カテゴリー_clean']
+
+        # 販売媒体データ
+        channel_data = df_clean.copy()
+        channel_data['企業名'] = channel_data['販売媒体_clean']
+        channel_data['カテゴリー'] = channel_data['販売先カテゴリー_clean']
+
+        # 統合（両方のデータを使用）
+        # ※同じレコードが仕入先と販売媒体の両方に計上されるのを避けるため、
+        # 仕入先と販売媒体を別々にピボットして後で結合する方式を採用
+
+        # セクション1: 企業別売上（業販+小売）
+        # 仕入先別の売上
+        pivot_supplier_sales = supplier_data.pivot_table(
             values='売上金_数値',
-            index='仕入れ先_clean',
+            index='企業名',
             columns='売却年月',
             aggfunc='sum',
             fill_value=0
         )
 
-        # セクション2: 企業別販売利益（業販）- 仕入先別の純利益
-        pivot2 = df_clean.pivot_table(
-            values='純利益_数値',
-            index='仕入れ先_clean',
-            columns='売却年月',
-            aggfunc='sum',
-            fill_value=0
-        )
-
-        # セクション3: 企業別売上（小売）- 販売媒体別の売上金
-        pivot3 = df_clean.pivot_table(
+        # 販売媒体別の売上
+        pivot_channel_sales = channel_data.pivot_table(
             values='売上金_数値',
-            index='販売媒体_clean',
+            index='企業名',
             columns='売却年月',
             aggfunc='sum',
             fill_value=0
         )
 
-        # セクション4: 企業別販売利益（小売）- 販売媒体別の純利益
-        pivot4 = df_clean.pivot_table(
+        # 統合（重複企業は加算）
+        pivot1 = pivot_supplier_sales.add(pivot_channel_sales, fill_value=0)
+
+        # セクション2: 企業別販売利益（業販+小売）
+        # 仕入先別の純利益
+        pivot_supplier_profit = supplier_data.pivot_table(
             values='純利益_数値',
-            index='販売媒体_clean',
+            index='企業名',
             columns='売却年月',
             aggfunc='sum',
             fill_value=0
         )
 
-        # セクション5: 企業別仕入高 - 仕入先別の仕入れ原価
+        # 販売媒体別の純利益
+        pivot_channel_profit = channel_data.pivot_table(
+            values='純利益_数値',
+            index='企業名',
+            columns='売却年月',
+            aggfunc='sum',
+            fill_value=0
+        )
+
+        # 統合（重複企業は加算）
+        pivot2 = pivot_supplier_profit.add(pivot_channel_profit, fill_value=0)
+
+        # カテゴリー情報を企業にマッピング
+        # 企業名 → カテゴリーのマッピングを作成
+        company_category_map = {}
+
+        # 仕入先のカテゴリーマッピング
+        for _, row in supplier_data[['企業名', 'カテゴリー']].drop_duplicates().iterrows():
+            company = row['企業名']
+            category = row['カテゴリー']
+            if company and company != '不明':
+                # 複数のカテゴリーがある場合は、最初に見つかったものを使用
+                if company not in company_category_map:
+                    company_category_map[company] = category
+
+        # 販売媒体のカテゴリーマッピング
+        for _, row in channel_data[['企業名', 'カテゴリー']].drop_duplicates().iterrows():
+            company = row['企業名']
+            category = row['カテゴリー']
+            if company and company != '不明':
+                if company not in company_category_map:
+                    company_category_map[company] = category
+
+        # セクション3: 企業別仕入高 - 仕入先別の仕入れ原価
         # 仕入高は在庫状況に関係なく全データから計算
         if purchase_df is not None and not purchase_df.empty:
             # 仕入データの前処理
@@ -484,8 +576,26 @@ class ExportTab:
             # 仕入先のクリーニング
             purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先'].apply(clean_company_name)
 
+            # 仕入先名を使用（ロールアップから取得した企業名）
+            if '仕入れ先名' in purchase_clean.columns:
+                purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先名'].apply(clean_company_name)
+
+            # カテゴリー情報を取得（仕入データにも追加）
+            if '仕入れ先カテゴリ' in purchase_clean.columns:
+                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_category)
+            else:
+                purchase_clean['仕入れ先カテゴリー_clean'] = "小売"
+
+            # 仕入データから企業カテゴリーマッピングを更新
+            for _, row in purchase_clean[['仕入れ先_clean', '仕入れ先カテゴリー_clean']].drop_duplicates().iterrows():
+                company = row['仕入れ先_clean']
+                category = row['仕入れ先カテゴリー_clean']
+                if company and company != '不明':
+                    if company not in company_category_map:
+                        company_category_map[company] = category
+
             # ピボットテーブル作成
-            pivot5 = purchase_clean.pivot_table(
+            pivot3 = purchase_clean.pivot_table(
                 values='仕入れ原価_数値',
                 index='仕入れ先_clean',
                 columns='仕入年月',
@@ -494,7 +604,7 @@ class ExportTab:
             )
         else:
             # フォールバック：売却済みデータから計算（後方互換性）
-            pivot5 = df_clean.pivot_table(
+            pivot3 = df_clean.pivot_table(
                 values='仕入れ原価_数値',
                 index='仕入れ先_clean',
                 columns='売却年月',
@@ -503,7 +613,7 @@ class ExportTab:
             )
 
         # 月の列を正しい順序で並べ替え、存在しない月は0で埋める
-        pivot_list = [pivot1, pivot2, pivot3, pivot4, pivot5]
+        pivot_list = [pivot1, pivot2, pivot3]
         for i in range(len(pivot_list)):
             pivot = pivot_list[i]
             # すべての月の列を作成（存在しない月は0で埋める）
@@ -513,23 +623,52 @@ class ExportTab:
             # 月の順序で並べ替え
             pivot_list[i] = pivot[months]
 
-        # 販売手数料と送料の月別集計
-        fees_by_month = {}
-        shipping_by_month = {}
+        # カテゴリー別集計を計算
+        # 売上のカテゴリー別集計
+        category_sales = {}
+        for category in ['市場', '業販', '小売']:
+            category_sales[category] = {}
+            for month in months:
+                category_sales[category][month] = 0
+                for company in pivot_list[0].index:
+                    if company_category_map.get(company) == category:
+                        category_sales[category][month] += pivot_list[0].loc[company, month]
 
-        for month in months:
-            month_data = df_clean[df_clean['売却年月'] == month]
-            fees_by_month[month] = month_data['販売手数料_数値'].sum()
-            shipping_by_month[month] = month_data['送料_数値'].sum()
+        # 利益のカテゴリー別集計
+        category_profit = {}
+        for category in ['市場', '業販', '小売']:
+            category_profit[category] = {}
+            for month in months:
+                category_profit[category][month] = 0
+                for company in pivot_list[1].index:
+                    if company_category_map.get(company) == category:
+                        category_profit[category][month] += pivot_list[1].loc[company, month]
 
-        # 5つのセクションを返す
-        # 画像の順序に従って：業販売上、業販利益、小売売上、小売利益、仕入高
+        # 仕入れ高のカテゴリー別集計
+        category_purchase = {}
+        for category in ['市場', '業販', '小売']:
+            category_purchase[category] = {}
+            for month in months:
+                category_purchase[category][month] = 0
+                for company in pivot_list[2].index:
+                    if company_category_map.get(company) == category:
+                        category_purchase[category][month] += pivot_list[2].loc[company, month]
+
+        # 仕入データ（purchase_clean）を返すために保存
+        purchase_data_for_mapping = None
+        if purchase_df is not None and not purchase_df.empty and 'purchase_clean' in locals():
+            purchase_data_for_mapping = purchase_clean
+
+        # 3つのセクションを返す
         return {
-            '企業別売上（業販）': pivot_list[0],      # 仕入先 × 売上金
-            '企業別販売利益（業販）': pivot_list[1],  # 仕入先 × 純利益
-            '企業別売上（小売）': pivot_list[2],      # 販売媒体 × 売上金
-            '企業別販売利益（小売）': pivot_list[3],  # 販売媒体 × 純利益
-            '企業別仕入高': pivot_list[4]             # 仕入先 × 仕入れ原価（全データ）
+            '企業別売上': pivot_list[0],           # 仕入先+販売媒体 × 売上金
+            '企業別販売利益': pivot_list[1],       # 仕入先+販売媒体 × 純利益
+            '企業別仕入高': pivot_list[2],         # 仕入先 × 仕入れ原価（全データ）
+            '企業カテゴリーマッピング': company_category_map,  # 企業 → カテゴリー
+            'カテゴリー別売上': category_sales,    # カテゴリー別売上集計
+            'カテゴリー別利益': category_profit,   # カテゴリー別利益集計
+            'カテゴリー別仕入高': category_purchase,  # カテゴリー別仕入高集計
+            '仕入データ': purchase_data_for_mapping  # 仕入データ（担当者マッピング用）
         }
 
     def export_pivot_excel(self, e):
@@ -632,35 +771,51 @@ class ExportTab:
                     if '作業担当' in self.pivot_df.columns:
                         import re
 
-                        # 仕入先の担当者グループ化
-                        for _, row in self.pivot_df[['仕入れ先', '作業担当']].drop_duplicates().iterrows():
-                            supplier = row['仕入れ先']
-                            assignee = row['作業担当']
-                            if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
-                                # URL除去してクリーン名を取得
-                                clean_name = supplier
-                                if isinstance(supplier, str) and '(https://' in supplier:
-                                    clean_name = re.sub(r'\s*\(https://.*?\)', '', supplier).strip()
+                        # 仕入先の担当者グループ化（仕入れ先名を使用）
+                        if '仕入れ先名' in self.pivot_df.columns and '作業担当' in self.pivot_df.columns:
+                            for _, row in self.pivot_df[['仕入れ先名', '作業担当']].drop_duplicates().iterrows():
+                                supplier = row['仕入れ先名']
+                                assignee = row['作業担当']
+                                if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
+                                    # URL除去してクリーン名を取得
+                                    clean_name = supplier
+                                    if isinstance(supplier, str) and '(https://' in supplier:
+                                        clean_name = re.sub(r'\s*\(https://.*?\)', '', supplier).strip()
 
-                                if assignee not in assignee_company_mapping:
-                                    assignee_company_mapping[assignee] = []
-                                if clean_name not in assignee_company_mapping[assignee]:
-                                    assignee_company_mapping[assignee].append(clean_name)
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if clean_name not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(clean_name)
 
-                        # 販売媒体の担当者グループ化
-                        for _, row in self.pivot_df[['販売媒体', '作業担当']].drop_duplicates().iterrows():
-                            channel = row['販売媒体']
-                            assignee = row['作業担当']
-                            if pd.notna(channel) and channel and channel != '不明' and pd.notna(assignee):
-                                # URL除去してクリーン名を取得
-                                clean_name = channel
-                                if isinstance(channel, str) and '(https://' in channel:
-                                    clean_name = re.sub(r'\s*\(https://.*?\)', '', channel).strip()
+                        # 販売媒体の担当者グループ化（販売媒体名を使用）
+                        if '販売媒体名' in self.pivot_df.columns and '作業担当' in self.pivot_df.columns:
+                            for _, row in self.pivot_df[['販売媒体名', '作業担当']].drop_duplicates().iterrows():
+                                channel = row['販売媒体名']
+                                assignee = row['作業担当']
+                                if pd.notna(channel) and channel and channel != '不明' and pd.notna(assignee):
+                                    # URL除去してクリーン名を取得
+                                    clean_name = channel
+                                    if isinstance(channel, str) and '(https://' in channel:
+                                        clean_name = re.sub(r'\s*\(https://.*?\)', '', channel).strip()
 
-                                if assignee not in assignee_company_mapping:
-                                    assignee_company_mapping[assignee] = []
-                                if clean_name not in assignee_company_mapping[assignee]:
-                                    assignee_company_mapping[assignee].append(clean_name)
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if clean_name not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(clean_name)
+
+                    # 仕入データからも担当者情報を取得（全在庫状況のデータ）
+                    purchase_data = sections.get('仕入データ')
+                    if purchase_data is not None and not purchase_data.empty:
+                        import re
+                        if '作業担当' in purchase_data.columns and '仕入れ先_clean' in purchase_data.columns:
+                            for _, row in purchase_data[['仕入れ先_clean', '作業担当']].drop_duplicates().iterrows():
+                                supplier = row['仕入れ先_clean']
+                                assignee = row['作業担当']
+                                if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if supplier not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(supplier)
 
                     # Excelワークブックを作成
                     wb = Workbook()
@@ -731,7 +886,20 @@ class ExportTab:
                         current_row += 1  # 全体合算と各セクションの間に空行
 
                     # 各セクションを順番に書き込み
-                    for section_name, pivot_df in sections.items():
+                    # カテゴリー関連のデータを取得
+                    company_category_map = sections.get('企業カテゴリーマッピング', {})
+                    category_sales = sections.get('カテゴリー別売上', {})
+                    category_profit = sections.get('カテゴリー別利益', {})
+                    category_purchase = sections.get('カテゴリー別仕入高', {})
+
+                    # カテゴリー別の背景色
+                    category_fill = PatternFill(start_color="E0F2F7", end_color="E0F2F7", fill_type="solid")  # 薄水色
+
+                    # 実際のピボットセクションのみを処理（メタデータを除外）
+                    pivot_sections = {k: v for k, v in sections.items()
+                                     if k in ['企業別売上', '企業別販売利益', '企業別仕入高']}
+
+                    for section_name, pivot_df in pivot_sections.items():
                         # セクションタイトル
                         ws.cell(row=current_row, column=1, value=section_name)
                         ws.cell(row=current_row, column=1).font = Font(bold=True, size=14)
@@ -765,22 +933,32 @@ class ExportTab:
                                 assignee_subtotal_by_month = {month: 0 for month in pivot_df.columns}
                                 assignee_grand_total = 0
 
-                                for company in companies:
-                                    if company in pivot_df.index:
-                                        ws.cell(row=current_row, column=1, value=company)
-                                        row_total = 0
-                                        for col_idx, month in enumerate(pivot_df.columns, start=2):
-                                            value = pivot_df.loc[company, month]
-                                            ws.cell(row=current_row, column=col_idx, value=value)
-                                            ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
-                                            row_total += value
-                                            assignee_subtotal_by_month[month] += value
+                                # 仕入れ高セクションでは企業名を非表示にする
+                                if section_name != '企業別仕入高':
+                                    for company in companies:
+                                        if company in pivot_df.index:
+                                            ws.cell(row=current_row, column=1, value=company)
+                                            row_total = 0
+                                            for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                                value = pivot_df.loc[company, month]
+                                                ws.cell(row=current_row, column=col_idx, value=value)
+                                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                                row_total += value
+                                                assignee_subtotal_by_month[month] += value
 
-                                        # 計列
-                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
-                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
-                                        assignee_grand_total += row_total
-                                        current_row += 1
+                                            # 計列
+                                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
+                                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                            assignee_grand_total += row_total
+                                            current_row += 1
+                                else:
+                                    # 仕入れ高の場合は企業名を表示せず、担当者の合計だけを計算
+                                    for company in companies:
+                                        if company in pivot_df.index:
+                                            for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                                value = pivot_df.loc[company, month]
+                                                assignee_subtotal_by_month[month] += value
+                                                assignee_grand_total += value
 
                                 # 担当者の小計行（担当者名+粗利計）
                                 ws.cell(row=current_row, column=1, value=f"{assignee}粗利計")
@@ -815,6 +993,73 @@ class ExportTab:
                                 ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
                                 current_row += 1
 
+                        # カテゴリー別合計行を追加（売上と利益のセクションのみ）
+                        if section_name == '企業別売上' and category_sales:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+
+                                category_row_total = 0
+                                for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                    category_value = category_sales.get(category, {}).get(month, 0)
+                                    ws.cell(row=current_row, column=col_idx, value=category_value)
+                                    ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                    ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                    ws.cell(row=current_row, column=col_idx).fill = category_fill
+                                    category_row_total += category_value
+
+                                # カテゴリー合計の計列
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=category_row_total)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = category_fill
+                                current_row += 1
+
+                        elif section_name == '企業別販売利益' and category_profit:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+
+                                category_row_total = 0
+                                for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                    category_value = category_profit.get(category, {}).get(month, 0)
+                                    ws.cell(row=current_row, column=col_idx, value=category_value)
+                                    ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                    ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                    ws.cell(row=current_row, column=col_idx).fill = category_fill
+                                    category_row_total += category_value
+
+                                # カテゴリー合計の計列
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=category_row_total)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = category_fill
+                                current_row += 1
+
+                        elif section_name == '企業別仕入高' and category_purchase:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+
+                                category_row_total = 0
+                                for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                    category_value = category_purchase.get(category, {}).get(month, 0)
+                                    ws.cell(row=current_row, column=col_idx, value=category_value)
+                                    ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                    ws.cell(row=current_row, column=col_idx).font = Font(bold=True)
+                                    ws.cell(row=current_row, column=col_idx).fill = category_fill
+                                    category_row_total += category_value
+
+                                # カテゴリー合計の計列
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=category_row_total)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=len(pivot_df.columns) + 2).fill = category_fill
+                                current_row += 1
+
                         # 合計行（薄橙色背景）
                         ws.cell(row=current_row, column=1, value="合計")
                         ws.cell(row=current_row, column=1).font = Font(bold=True)
@@ -839,7 +1084,7 @@ class ExportTab:
                     # 列幅調整
                     ws.column_dimensions['A'].width = 20
                     # 最初のセクションの列数を取得
-                    num_cols = len(sections[list(sections.keys())[0]].columns) + 2
+                    num_cols = len(list(pivot_sections.values())[0].columns) + 2
                     for col_idx in range(2, num_cols + 1):
                         # A=1, B=2, ... Z=26, AA=27, AB=28, ...
                         if col_idx <= 26:
