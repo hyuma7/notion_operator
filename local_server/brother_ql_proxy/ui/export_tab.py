@@ -30,18 +30,25 @@ class ExportTab:
         self.pivot_start_month_value = None  # ピボット集計の開始月
 
         # 財務集計用の開始年月選択
-        self.pivot_start_year = ft.Dropdown(
-            label="開始年",
-            width=150,
-            options=[ft.dropdown.Option(str(y)) for y in range(2020, 2031)],
-            value="2025"
+        from datetime import datetime
+        default_date = datetime(2025, 6, 1)
+        self.pivot_start_date = default_date  # 選択された開始日を保存
+
+        # DatePickerの作成
+        self.pivot_date_picker = ft.DatePicker(
+            value=default_date,
+            first_date=datetime(2020, 1, 1),
+            last_date=datetime(2030, 12, 31),
+            on_change=self.on_pivot_date_change,
+            cancel_text="キャンセル",
+            confirm_text="選択",
         )
 
-        self.pivot_start_month = ft.Dropdown(
-            label="開始月",
-            width=150,
-            options=[ft.dropdown.Option(str(m), f"{m}月") for m in range(1, 13)],
-            value="6"
+        # 日付選択ボタン
+        self.pivot_date_button = ft.ElevatedButton(
+            text=f"開始月: {default_date.year}年{default_date.month}月",
+            icon=ft.Icons.CALENDAR_MONTH,
+            on_click=lambda _: self.page.open(self.pivot_date_picker)
         )
 
         # ピボット集計用ボタン
@@ -60,17 +67,97 @@ class ExportTab:
 
         # 結果表示
         self.result_text = ft.Text("", size=14)
-        self.data_table = ft.DataTable(
-            columns=[ft.DataColumn(ft.Text("データを取得してください"))],
-            rows=[],
-            border=ft.border.all(1, ft.Colors.GREY_400),
-            border_radius=10,
-            vertical_lines=ft.BorderSide(1, ft.Colors.GREY_300),
-            horizontal_lines=ft.BorderSide(1, ft.Colors.GREY_300),
-        )
 
         # プログレスバー
         self.progress = ft.ProgressBar(visible=False)
+
+        # 日別売上用の変数
+        self.daily_df = None  # 日別売上データ
+        self.daily_purchase_df = None  # 日別仕入データ
+        self.daily_start_date = None  # 日別売上の開始日
+        self.daily_end_date = None  # 日別売上の終了日
+
+        # 日別売上用の日付選択
+        from datetime import timedelta
+        today = datetime.now()
+
+        self.daily_start_date = today  # 開始日
+        self.daily_end_date = today  # 終了日
+
+        # 開始日DatePicker
+        self.daily_start_date_picker_dialog = ft.DatePicker(
+            value=today,
+            first_date=datetime(2020, 1, 1),
+            last_date=datetime(2030, 12, 31),
+            on_change=self.on_daily_start_date_change,
+            cancel_text="キャンセル",
+            confirm_text="選択",
+        )
+
+        # 終了日DatePicker
+        self.daily_end_date_picker_dialog = ft.DatePicker(
+            value=today,
+            first_date=datetime(2020, 1, 1),
+            last_date=datetime(2030, 12, 31),
+            on_change=self.on_daily_end_date_change,
+            cancel_text="キャンセル",
+            confirm_text="選択",
+        )
+
+        # 開始日選択ボタン
+        self.daily_start_date_button = ft.ElevatedButton(
+            text=f"開始日: {today.strftime('%Y-%m-%d')}",
+            icon=ft.Icons.CALENDAR_TODAY,
+            on_click=lambda _: self.page.open(self.daily_start_date_picker_dialog)
+        )
+
+        # 終了日選択ボタン
+        self.daily_end_date_button = ft.ElevatedButton(
+            text=f"終了日: {today.strftime('%Y-%m-%d')}",
+            icon=ft.Icons.CALENDAR_TODAY,
+            on_click=lambda _: self.page.open(self.daily_end_date_picker_dialog)
+        )
+
+        # 日別売上用ボタン
+        self.fetch_daily_btn = ft.ElevatedButton(
+            "日別売上データを取得",
+            icon=ft.Icons.CALENDAR_TODAY,
+            on_click=self.fetch_daily_data
+        )
+
+        self.export_daily_btn = ft.ElevatedButton(
+            "日別売上Excelを保存",
+            icon=ft.Icons.TABLE_CHART,
+            on_click=self.export_daily_excel,
+            disabled=True
+        )
+
+        # 日別売上用の結果表示
+        self.daily_result_text = ft.Text("", size=14)
+
+    def on_pivot_date_change(self, e):
+        """財務集計の開始月選択時のイベントハンドラー"""
+        if e.control.value:
+            self.pivot_start_date = e.control.value
+            # ボタンのテキストを更新
+            self.pivot_date_button.text = f"開始月: {self.pivot_start_date.year}年{self.pivot_start_date.month}月"
+            self.page.update()
+
+    def on_daily_start_date_change(self, e):
+        """日別売上の開始日選択時のイベントハンドラー"""
+        if e.control.value:
+            self.daily_start_date = e.control.value
+            # ボタンのテキストを更新
+            self.daily_start_date_button.text = f"開始日: {self.daily_start_date.strftime('%Y-%m-%d')}"
+            self.page.update()
+
+    def on_daily_end_date_change(self, e):
+        """日別売上の終了日選択時のイベントハンドラー"""
+        if e.control.value:
+            self.daily_end_date = e.control.value
+            # ボタンのテキストを更新
+            self.daily_end_date_button.text = f"終了日: {self.daily_end_date.strftime('%Y-%m-%d')}"
+            self.page.update()
 
     def fetch_pivot_data(self, e):
         """財務集計データを取得（選択した開始月から12ヶ月分）"""
@@ -89,8 +176,8 @@ class ExportTab:
             notion = Client(auth=api_key)
 
             # 選択された開始年月を取得
-            start_year = int(self.pivot_start_year.value)
-            start_month = int(self.pivot_start_month.value)
+            start_year = self.pivot_start_date.year
+            start_month = self.pivot_start_date.month
 
             # 開始日と終了日を計算（12ヶ月分）
             start_date = f"{start_year}-{start_month:02d}-01"
@@ -217,6 +304,152 @@ class ExportTab:
         except Exception as ex:
             self.result_text.value = f"❌ エラー: {str(ex)}"
             self.export_pivot_btn.disabled = True
+
+        self.progress.visible = False
+        self.page.update()
+
+    def fetch_daily_data(self, e):
+        """日別売上データを取得（選択した日付範囲）"""
+        api_key = self.proxy.config.get("notion_api_key", "")
+        database_id = self.proxy.config.get("notion_database_id", "")
+
+        if not api_key or not database_id:
+            self.show_snackbar("設定タブでNotion API KeyとDatabase IDを設定してください", ft.Colors.RED)
+            return
+
+        # 日付の検証
+        start_date = self.daily_start_date
+        end_date = self.daily_end_date
+
+        if start_date > end_date:
+            self.show_snackbar("開始日は終了日より前である必要があります", ft.Colors.RED)
+            return
+
+        start_date_str = start_date.strftime("%Y-%m-%d")
+        end_date_str = end_date.strftime("%Y-%m-%d")
+
+        self.progress.visible = True
+        self.daily_result_text.value = "日別売上データを取得中..."
+        self.page.update()
+
+        try:
+            notion = Client(auth=api_key)
+
+            # 終了日の翌日を計算（beforeフィルタ用）
+            from datetime import timedelta
+            end_date_plus_one = end_date + timedelta(days=1)
+            end_date_filter = end_date_plus_one.strftime("%Y-%m-%d")
+
+            # 売却済みデータを取得（ページネーション対応）
+            all_sold_results = []
+            has_more = True
+            start_cursor = None
+
+            while has_more:
+                query_params = {
+                    "database_id": database_id,
+                    "filter": {
+                        "and": [
+                            {
+                                "property": "在庫状況",
+                                "status": {
+                                    "equals": "売却済み"
+                                }
+                            },
+                            {
+                                "property": "売却日",
+                                "date": {
+                                    "on_or_after": start_date_str
+                                }
+                            },
+                            {
+                                "property": "売却日",
+                                "date": {
+                                    "before": end_date_filter
+                                }
+                            }
+                        ]
+                    },
+                    "page_size": 100
+                }
+
+                if start_cursor:
+                    query_params["start_cursor"] = start_cursor
+
+                results = notion.databases.query(**query_params)
+                all_sold_results.extend(results["results"])
+                has_more = results.get("has_more", False)
+                start_cursor = results.get("next_cursor")
+
+            # 全結果を辞書形式に変換
+            combined_results = {
+                "results": all_sold_results
+            }
+
+            # データフレームに変換（売却済みデータ）
+            self.daily_df = self.parse_notion_results(combined_results)
+
+            # 全データを取得（在庫状況不問、Created time基準）
+            all_purchase_results = []
+            has_more = True
+            start_cursor = None
+
+            while has_more:
+                query_params = {
+                    "database_id": database_id,
+                    "page_size": 100
+                }
+
+                if start_cursor:
+                    query_params["start_cursor"] = start_cursor
+
+                results = notion.databases.query(**query_params)
+                all_purchase_results.extend(results["results"])
+                has_more = results.get("has_more", False)
+                start_cursor = results.get("next_cursor")
+
+            # 仕入データをDataFrameに変換
+            purchase_combined_results = {
+                "results": all_purchase_results
+            }
+            self.daily_purchase_df = self.parse_notion_results(purchase_combined_results)
+
+            # Created timeでフィルタリング（取得後）
+            if not self.daily_purchase_df.empty and 'Created time' in self.daily_purchase_df.columns:
+                # Created timeを日付型に変換（UTC）
+                self.daily_purchase_df['Created time'] = pd.to_datetime(
+                    self.daily_purchase_df['Created time'],
+                    errors='coerce',
+                    utc=True
+                )
+                # 期間でフィルタ（UTCに変換して比較）
+                start_dt = pd.to_datetime(start_date_str, utc=True)
+                end_dt = pd.to_datetime(end_date_filter, utc=True)
+                self.daily_purchase_df = self.daily_purchase_df[
+                    (self.daily_purchase_df['Created time'] >= start_dt) &
+                    (self.daily_purchase_df['Created time'] < end_dt)
+                ]
+
+            if not self.daily_df.empty:
+                # 日付を保存
+                self.daily_start_date = start_date_str
+                self.daily_end_date = end_date_str
+
+                # 日数を計算
+                days_count = (end_date - start_date).days + 1
+                if days_count == 1:
+                    self.daily_result_text.value = f"✅ {start_date_str}の{len(self.daily_df)}件のデータを取得しました"
+                else:
+                    self.daily_result_text.value = f"✅ {start_date_str}〜{end_date_str}（{days_count}日間）の{len(self.daily_df)}件のデータを取得しました"
+
+                self.export_daily_btn.disabled = False
+            else:
+                self.daily_result_text.value = "⚠️ 該当期間のデータがありません"
+                self.export_daily_btn.disabled = True
+
+        except Exception as ex:
+            self.daily_result_text.value = f"❌ エラー: {str(ex)}"
+            self.export_daily_btn.disabled = True
 
         self.progress.visible = False
         self.page.update()
@@ -669,6 +902,168 @@ class ExportTab:
             'カテゴリー別利益': category_profit,   # カテゴリー別利益集計
             'カテゴリー別仕入高': category_purchase,  # カテゴリー別仕入高集計
             '仕入データ': purchase_data_for_mapping  # 仕入データ（担当者マッピング用）
+        }
+
+    def create_daily_pivot_sections(self, df, purchase_df=None):
+        """日別売上用のピボットテーブルを作成（列は「合計」のみ）
+
+        Args:
+            df: 売却済みデータのDataFrame（売上・利益計算用）
+            purchase_df: 全データのDataFrame（仕入高計算用、在庫状況不問）
+        """
+        import re
+
+        # データの前処理
+        df_clean = df.copy()
+
+        # 数値フィールドのクリーニング
+        def clean_currency(value):
+            if pd.isna(value) or value == "":
+                return 0
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                value = value.replace('￥', '').replace(',', '').strip()
+                try:
+                    return float(value)
+                except:
+                    return 0
+            return 0
+
+        df_clean['売上金_数値'] = df_clean['売上金'].apply(clean_currency)
+        df_clean['純利益_数値'] = df_clean['純利益'].apply(clean_currency)
+        df_clean['仕入れ原価_数値'] = df_clean['仕入れ原価'].apply(clean_currency)
+
+        # 仕入先と販売媒体のクリーニング
+        def clean_company_name(value):
+            if pd.isna(value) or value == "":
+                return "不明"
+            if isinstance(value, str) and '(https://' in value:
+                value = re.sub(r'\s*\(https://.*?\)', '', value)
+            return value.strip()
+
+        # カテゴリーのクリーニング（未設定は「小売」）
+        def clean_category(value):
+            if pd.isna(value) or value == "" or value == "不明":
+                return "小売"
+            value_str = str(value).strip()
+            if value_str in ["市場", "業販", "小売"]:
+                return value_str
+            return "小売"
+
+        df_clean['仕入れ先_clean'] = df_clean['仕入れ先名'].apply(clean_company_name) if '仕入れ先名' in df_clean.columns else df_clean['仕入れ先'].apply(clean_company_name)
+        df_clean['販売媒体_clean'] = df_clean['販売媒体名'].apply(clean_company_name) if '販売媒体名' in df_clean.columns else "不明"
+
+        # カテゴリー情報を取得
+        if '販売先カテゴリ' in df_clean.columns:
+            df_clean['販売先カテゴリー_clean'] = df_clean['販売先カテゴリ'].apply(clean_category)
+        else:
+            df_clean['販売先カテゴリー_clean'] = "小売"
+
+        if '仕入れ先カテゴリ' in df_clean.columns:
+            df_clean['仕入れ先カテゴリー_clean'] = df_clean['仕入れ先カテゴリ'].apply(clean_category)
+        else:
+            df_clean['仕入れ先カテゴリー_clean'] = "小売"
+
+        # 統合データを作成
+        supplier_data = df_clean.copy()
+        supplier_data['企業名'] = supplier_data['仕入れ先_clean']
+        supplier_data['カテゴリー'] = supplier_data['仕入れ先カテゴリー_clean']
+
+        channel_data = df_clean.copy()
+        channel_data['企業名'] = channel_data['販売媒体_clean']
+        channel_data['カテゴリー'] = channel_data['販売先カテゴリー_clean']
+
+        # 企業別の合計を計算（月列なし、合計のみ）
+        # 売上の合計
+        supplier_sales = supplier_data.groupby('企業名')['売上金_数値'].sum()
+        channel_sales = channel_data.groupby('企業名')['売上金_数値'].sum()
+        sales_total = supplier_sales.add(channel_sales, fill_value=0)
+        pivot1 = pd.DataFrame({'合計': sales_total})
+
+        # 利益の合計
+        supplier_profit = supplier_data.groupby('企業名')['純利益_数値'].sum()
+        channel_profit = channel_data.groupby('企業名')['純利益_数値'].sum()
+        profit_total = supplier_profit.add(channel_profit, fill_value=0)
+        pivot2 = pd.DataFrame({'合計': profit_total})
+
+        # カテゴリーマッピング
+        company_category_map = {}
+        for _, row in supplier_data[['企業名', 'カテゴリー']].drop_duplicates().iterrows():
+            company = row['企業名']
+            category = row['カテゴリー']
+            if company and company != '不明':
+                if company not in company_category_map:
+                    company_category_map[company] = category
+
+        for _, row in channel_data[['企業名', 'カテゴリー']].drop_duplicates().iterrows():
+            company = row['企業名']
+            category = row['カテゴリー']
+            if company and company != '不明':
+                if company not in company_category_map:
+                    company_category_map[company] = category
+
+        # 仕入高の合計
+        if purchase_df is not None and not purchase_df.empty:
+            purchase_clean = purchase_df.copy()
+            purchase_clean['仕入れ原価_数値'] = purchase_clean['仕入れ原価'].apply(clean_currency)
+            purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先名'].apply(clean_company_name) if '仕入れ先名' in purchase_clean.columns else purchase_clean['仕入れ先'].apply(clean_company_name)
+
+            if '仕入れ先カテゴリ' in purchase_clean.columns:
+                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_category)
+            else:
+                purchase_clean['仕入れ先カテゴリー_clean'] = "小売"
+
+            # カテゴリーマッピングを更新
+            for _, row in purchase_clean[['仕入れ先_clean', '仕入れ先カテゴリー_clean']].drop_duplicates().iterrows():
+                company = row['仕入れ先_clean']
+                category = row['仕入れ先カテゴリー_clean']
+                if company and company != '不明':
+                    if company not in company_category_map:
+                        company_category_map[company] = category
+
+            purchase_total = purchase_clean.groupby('仕入れ先_clean')['仕入れ原価_数値'].sum()
+            pivot3 = pd.DataFrame({'合計': purchase_total})
+        else:
+            purchase_total = df_clean.groupby('仕入れ先_clean')['仕入れ原価_数値'].sum()
+            pivot3 = pd.DataFrame({'合計': purchase_total})
+
+        # カテゴリー別集計
+        category_sales = {}
+        category_profit = {}
+        category_purchase = {}
+
+        for category in ['市場', '業販', '小売']:
+            category_sales[category] = {'合計': 0}
+            category_profit[category] = {'合計': 0}
+            category_purchase[category] = {'合計': 0}
+
+            for company in pivot1.index:
+                if company_category_map.get(company) == category:
+                    category_sales[category]['合計'] += pivot1.loc[company, '合計']
+
+            for company in pivot2.index:
+                if company_category_map.get(company) == category:
+                    category_profit[category]['合計'] += pivot2.loc[company, '合計']
+
+            for company in pivot3.index:
+                if company_category_map.get(company) == category:
+                    category_purchase[category]['合計'] += pivot3.loc[company, '合計']
+
+        # 仕入データを保存
+        purchase_data_for_mapping = None
+        if purchase_df is not None and not purchase_df.empty:
+            purchase_data_for_mapping = purchase_clean
+
+        return {
+            '企業別売上': pivot1,
+            '企業別販売利益': pivot2,
+            '企業別仕入高': pivot3,
+            '企業カテゴリーマッピング': company_category_map,
+            'カテゴリー別売上': category_sales,
+            'カテゴリー別利益': category_profit,
+            'カテゴリー別仕入高': category_purchase,
+            '仕入データ': purchase_data_for_mapping
         }
 
     def export_pivot_excel(self, e):
@@ -1126,8 +1521,252 @@ class ExportTab:
         self.page.snack_bar.open = True
         self.page.update()
 
+    def export_daily_excel(self, e):
+        """日別売上Excelを保存（export_pivot_excelを流用）"""
+        if self.daily_df is None or self.daily_df.empty:
+            return
+
+        # ファイル名を生成
+        if self.daily_start_date == self.daily_end_date:
+            file_name = f"日別売上_{self.daily_start_date}.xlsx"
+        else:
+            file_name = f"日別売上_{self.daily_start_date}_{self.daily_end_date}.xlsx"
+
+        def save_file(e: ft.FilePickerResultEvent):
+            if e.path:
+                try:
+                    from openpyxl import Workbook
+                    from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
+
+                    # ピボットセクションを作成（日別用）
+                    sections = self.create_daily_pivot_sections(
+                        self.daily_df,
+                        self.daily_purchase_df if hasattr(self, 'daily_purchase_df') else None
+                    )
+
+                    # Excelワークブックを作成
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "日別売上"
+
+                    current_row = 1
+
+                    # 色の定義
+                    header_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+                    total_fill = PatternFill(start_color="FFE4B5", end_color="FFE4B5", fill_type="solid")
+                    category_fill = PatternFill(start_color="E0F2F7", end_color="E0F2F7", fill_type="solid")
+
+                    assignee_colors = [
+                        PatternFill(start_color="E6F3FF", end_color="E6F3FF", fill_type="solid"),
+                        PatternFill(start_color="FFE6F0", end_color="FFE6F0", fill_type="solid"),
+                        PatternFill(start_color="E6FFE6", end_color="E6FFE6", fill_type="solid"),
+                        PatternFill(start_color="FFF4E6", end_color="FFF4E6", fill_type="solid"),
+                        PatternFill(start_color="F0E6FF", end_color="F0E6FF", fill_type="solid"),
+                        PatternFill(start_color="FFFFE6", end_color="FFFFE6", fill_type="solid"),
+                    ]
+
+                    # タイトル行
+                    if self.daily_start_date == self.daily_end_date:
+                        ws.cell(row=current_row, column=1, value=f"日別売上集計（{self.daily_start_date}）")
+                    else:
+                        ws.cell(row=current_row, column=1, value=f"日別売上集計（{self.daily_start_date}〜{self.daily_end_date}）")
+                    ws.cell(row=current_row, column=1).font = Font(bold=True, size=16)
+                    current_row += 2
+
+                    # カテゴリー関連のデータを取得
+                    company_category_map = sections.get('企業カテゴリーマッピング', {})
+                    category_sales = sections.get('カテゴリー別売上', {})
+                    category_profit = sections.get('カテゴリー別利益', {})
+                    category_purchase = sections.get('カテゴリー別仕入高', {})
+
+                    # 担当者マッピングを作成
+                    assignee_company_mapping = {}
+                    import re
+
+                    if '作業担当' in self.daily_df.columns:
+                        if '仕入れ先名' in self.daily_df.columns:
+                            for _, row in self.daily_df[['仕入れ先名', '作業担当']].drop_duplicates().iterrows():
+                                supplier = row['仕入れ先名']
+                                assignee = row['作業担当']
+                                if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
+                                    clean_name = supplier
+                                    if isinstance(supplier, str) and '(https://' in supplier:
+                                        clean_name = re.sub(r'\s*\(https://.*?\)', '', supplier).strip()
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if clean_name not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(clean_name)
+
+                        if '販売媒体名' in self.daily_df.columns:
+                            for _, row in self.daily_df[['販売媒体名', '作業担当']].drop_duplicates().iterrows():
+                                channel = row['販売媒体名']
+                                assignee = row['作業担当']
+                                if pd.notna(channel) and channel and channel != '不明' and pd.notna(assignee):
+                                    clean_name = channel
+                                    if isinstance(channel, str) and '(https://' in channel:
+                                        clean_name = re.sub(r'\s*\(https://.*?\)', '', channel).strip()
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if clean_name not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(clean_name)
+
+                    # 仕入データからも担当者情報を取得
+                    purchase_data = sections.get('仕入データ')
+                    if purchase_data is not None and not purchase_data.empty:
+                        if '作業担当' in purchase_data.columns and '仕入れ先_clean' in purchase_data.columns:
+                            for _, row in purchase_data[['仕入れ先_clean', '作業担当']].drop_duplicates().iterrows():
+                                supplier = row['仕入れ先_clean']
+                                assignee = row['作業担当']
+                                if pd.notna(supplier) and supplier and supplier != '不明' and pd.notna(assignee):
+                                    if assignee not in assignee_company_mapping:
+                                        assignee_company_mapping[assignee] = []
+                                    if supplier not in assignee_company_mapping[assignee]:
+                                        assignee_company_mapping[assignee].append(supplier)
+
+                    # 各セクションを書き込み
+                    pivot_sections = {k: v for k, v in sections.items()
+                                     if k in ['企業別売上', '企業別販売利益', '企業別仕入高']}
+
+                    for section_name, pivot_df in pivot_sections.items():
+                        # セクションタイトル
+                        ws.cell(row=current_row, column=1, value=section_name)
+                        ws.cell(row=current_row, column=1).font = Font(bold=True, size=14)
+                        current_row += 1
+
+                        # ヘッダー行
+                        ws.cell(row=current_row, column=1, value="")
+                        ws.cell(row=current_row, column=1).fill = header_fill
+                        ws.cell(row=current_row, column=2, value="合計")
+                        ws.cell(row=current_row, column=2).font = Font(bold=True)
+                        ws.cell(row=current_row, column=2).alignment = Alignment(horizontal='center')
+                        ws.cell(row=current_row, column=2).fill = header_fill
+                        current_row += 1
+
+                        # 担当者ごとにグループ化して表示
+                        if assignee_company_mapping:
+                            assignee_idx = 0
+                            for assignee, companies in sorted(assignee_company_mapping.items()):
+                                assignee_fill = assignee_colors[assignee_idx % len(assignee_colors)]
+                                assignee_idx += 1
+
+                                assignee_total = 0
+
+                                # 仕入れ高セクションでは企業名を非表示
+                                if section_name != '企業別仕入高':
+                                    for company in companies:
+                                        if company in pivot_df.index:
+                                            ws.cell(row=current_row, column=1, value=company)
+                                            value = pivot_df.loc[company, '合計']
+                                            ws.cell(row=current_row, column=2, value=value)
+                                            ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                            assignee_total += value
+                                            current_row += 1
+                                else:
+                                    for company in companies:
+                                        if company in pivot_df.index:
+                                            assignee_total += pivot_df.loc[company, '合計']
+
+                                # 担当者の小計行
+                                ws.cell(row=current_row, column=1, value=f"{assignee}粗利計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = assignee_fill
+                                ws.cell(row=current_row, column=2, value=assignee_total)
+                                ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=2).fill = assignee_fill
+                                current_row += 1
+                        else:
+                            for company in pivot_df.index:
+                                ws.cell(row=current_row, column=1, value=company)
+                                value = pivot_df.loc[company, '合計']
+                                ws.cell(row=current_row, column=2, value=value)
+                                ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                current_row += 1
+
+                        # カテゴリー別合計行を追加
+                        if section_name == '企業別売上' and category_sales:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+                                category_value = category_sales.get(category, {}).get('合計', 0)
+                                ws.cell(row=current_row, column=2, value=category_value)
+                                ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=2).fill = category_fill
+                                current_row += 1
+
+                        elif section_name == '企業別販売利益' and category_profit:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+                                category_value = category_profit.get(category, {}).get('合計', 0)
+                                ws.cell(row=current_row, column=2, value=category_value)
+                                ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=2).fill = category_fill
+                                current_row += 1
+
+                        elif section_name == '企業別仕入高' and category_purchase:
+                            for category in ['市場', '業販', '小売']:
+                                ws.cell(row=current_row, column=1, value=f"{category}合計")
+                                ws.cell(row=current_row, column=1).font = Font(bold=True)
+                                ws.cell(row=current_row, column=1).fill = category_fill
+                                category_value = category_purchase.get(category, {}).get('合計', 0)
+                                ws.cell(row=current_row, column=2, value=category_value)
+                                ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                ws.cell(row=current_row, column=2).font = Font(bold=True)
+                                ws.cell(row=current_row, column=2).fill = category_fill
+                                current_row += 1
+
+                        # 合計行
+                        ws.cell(row=current_row, column=1, value="合計")
+                        ws.cell(row=current_row, column=1).font = Font(bold=True)
+                        ws.cell(row=current_row, column=1).fill = total_fill
+                        grand_total = pivot_df['合計'].sum()
+                        ws.cell(row=current_row, column=2, value=grand_total)
+                        ws.cell(row=current_row, column=2).number_format = '#,##0'
+                        ws.cell(row=current_row, column=2).font = Font(bold=True)
+                        ws.cell(row=current_row, column=2).fill = total_fill
+                        current_row += 1
+
+                        current_row += 1  # セクション間に空行
+
+                    # 列幅調整
+                    ws.column_dimensions['A'].width = 20
+                    ws.column_dimensions['B'].width = 15
+
+                    # 保存
+                    wb.save(e.path)
+                    self.show_snackbar(f"保存しました: {e.path}", ft.Colors.GREEN)
+
+                except Exception as ex:
+                    import traceback
+                    error_detail = traceback.format_exc()
+                    self.show_snackbar(f"保存エラー: {str(ex)}", ft.Colors.RED)
+                    print(error_detail)
+
+        file_picker = ft.FilePicker(on_result=save_file)
+        self.page.overlay.append(file_picker)
+        self.page.update()
+
+        file_picker.save_file(
+            dialog_title="日別売上Excelを保存",
+            file_name=file_name,
+            file_type=ft.FilePickerFileType.CUSTOM,
+            allowed_extensions=["xlsx"]
+        )
+
     def create_tab(self) -> ft.Tab:
         """タブを作成"""
+        # DatePickerをページのoverlayに追加
+        self.page.overlay.extend([
+            self.pivot_date_picker,
+            self.daily_start_date_picker_dialog,
+            self.daily_end_date_picker_dialog,
+        ])
+
         return ft.Tab(
             text="Excel出力",
             icon=ft.Icons.TABLE_CHART,
@@ -1142,10 +1781,7 @@ class ExportTab:
                                 ft.Text("財務集計期間選択", size=18, weight=ft.FontWeight.BOLD),
                                 ft.Divider(),
                                 ft.Text("開始年月（12ヶ月分を集計）", size=14, weight=ft.FontWeight.BOLD),
-                                ft.Row([
-                                    self.pivot_start_year,
-                                    self.pivot_start_month,
-                                ]),
+                                self.pivot_date_button,
                                 ft.Text("※「在庫状況」が「売却済み」のデータのみ取得します",
                                        size=12, color=ft.Colors.GREY_600),
                             ])
@@ -1158,20 +1794,30 @@ class ExportTab:
                     ]),
                     self.progress,
                     self.result_text,
-                    # データプレビュー
+                    # 日別売上カード
+                    ft.Divider(height=30, color=ft.Colors.TRANSPARENT),
                     ft.Card(
                         content=ft.Container(
                             padding=ft.padding.all(20),
                             content=ft.Column([
-                                ft.Text("データプレビュー", size=18, weight=ft.FontWeight.BOLD),
+                                ft.Text("日別売上集計", size=18, weight=ft.FontWeight.BOLD),
                                 ft.Divider(),
-                                ft.Container(
-                                    content=self.data_table,
-                                    height=300,
-                                )
+                                ft.Text("日付範囲を選択", size=14, weight=ft.FontWeight.BOLD),
+                                ft.Row([
+                                    self.daily_start_date_button,
+                                    self.daily_end_date_button,
+                                ]),
+                                ft.Text("※デフォルトは今日の日付（1日分）です",
+                                       size=12, color=ft.Colors.GREY_600),
                             ])
                         )
                     ),
+                    # 日別売上操作ボタン
+                    ft.Row([
+                        self.fetch_daily_btn,
+                        self.export_daily_btn,
+                    ]),
+                    self.daily_result_text,
                 ], scroll=ft.ScrollMode.AUTO)
             )
         )
