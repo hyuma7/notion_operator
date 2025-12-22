@@ -1328,35 +1328,28 @@ class ExportTab:
                                 assignee_subtotal_by_month = {month: 0 for month in pivot_df.columns}
                                 assignee_grand_total = 0
 
-                                # 仕入れ高セクションでは企業名を非表示にする
-                                if section_name != '企業別仕入高':
-                                    for company in companies:
-                                        if company in pivot_df.index:
-                                            ws.cell(row=current_row, column=1, value=company)
-                                            row_total = 0
-                                            for col_idx, month in enumerate(pivot_df.columns, start=2):
-                                                value = pivot_df.loc[company, month]
-                                                ws.cell(row=current_row, column=col_idx, value=value)
-                                                ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
-                                                row_total += value
-                                                assignee_subtotal_by_month[month] += value
+                                # 全セクションで企業名を表示するように変更（入庫も含む）
+                                for company in companies:
+                                    if company in pivot_df.index:
+                                        # 企業別仕入高セクションでも企業名を表示する
+                                        ws.cell(row=current_row, column=1, value=company)
+                                        row_total = 0
+                                        for col_idx, month in enumerate(pivot_df.columns, start=2):
+                                            value = pivot_df.loc[company, month]
+                                            ws.cell(row=current_row, column=col_idx, value=value)
+                                            ws.cell(row=current_row, column=col_idx).number_format = '#,##0'
+                                            row_total += value
+                                            assignee_subtotal_by_month[month] += value
 
-                                            # 計列
-                                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
-                                            ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
-                                            assignee_grand_total += row_total
-                                            current_row += 1
-                                else:
-                                    # 仕入れ高の場合は企業名を表示せず、担当者の合計だけを計算
-                                    for company in companies:
-                                        if company in pivot_df.index:
-                                            for col_idx, month in enumerate(pivot_df.columns, start=2):
-                                                value = pivot_df.loc[company, month]
-                                                assignee_subtotal_by_month[month] += value
-                                                assignee_grand_total += value
+                                        # 計列
+                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2, value=row_total)
+                                        ws.cell(row=current_row, column=len(pivot_df.columns) + 2).number_format = '#,##0'
+                                        assignee_grand_total += row_total
+                                        current_row += 1
 
-                                # 担当者の小計行（担当者名+粗利計）
-                                ws.cell(row=current_row, column=1, value=f"{assignee}粗利計")
+                                # 担当者の小計行（担当者名+小計）
+                                label_suffix = "粗利計" if section_name == '企業別販売利益' else "計"
+                                ws.cell(row=current_row, column=1, value=f"{assignee}{label_suffix}")
                                 ws.cell(row=current_row, column=1).font = Font(bold=True)
                                 ws.cell(row=current_row, column=1).fill = assignee_fill
                                 for col_idx, month in enumerate(pivot_df.columns, start=2):
@@ -1651,23 +1644,19 @@ class ExportTab:
 
                                 assignee_total = 0
 
-                                # 仕入れ高セクションでは企業名を非表示
-                                if section_name != '企業別仕入高':
-                                    for company in companies:
-                                        if company in pivot_df.index:
-                                            ws.cell(row=current_row, column=1, value=company)
-                                            value = pivot_df.loc[company, '合計']
-                                            ws.cell(row=current_row, column=2, value=value)
-                                            ws.cell(row=current_row, column=2).number_format = '#,##0'
-                                            assignee_total += value
-                                            current_row += 1
-                                else:
-                                    for company in companies:
-                                        if company in pivot_df.index:
-                                            assignee_total += pivot_df.loc[company, '合計']
+                                # 全セクションで企業名を表示（入庫も含む）
+                                for company in companies:
+                                    if company in pivot_df.index:
+                                        ws.cell(row=current_row, column=1, value=company)
+                                        value = pivot_df.loc[company, '合計']
+                                        ws.cell(row=current_row, column=2, value=value)
+                                        ws.cell(row=current_row, column=2).number_format = '#,##0'
+                                        assignee_total += value
+                                        current_row += 1
 
                                 # 担当者の小計行
-                                ws.cell(row=current_row, column=1, value=f"{assignee}粗利計")
+                                label_suffix = "粗利計" if section_name == '企業別販売利益' else "計"
+                                ws.cell(row=current_row, column=1, value=f"{assignee}{label_suffix}")
                                 ws.cell(row=current_row, column=1).font = Font(bold=True)
                                 ws.cell(row=current_row, column=1).fill = assignee_fill
                                 ws.cell(row=current_row, column=2, value=assignee_total)
