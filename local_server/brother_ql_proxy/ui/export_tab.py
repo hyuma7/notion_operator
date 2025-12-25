@@ -813,19 +813,30 @@ class ExportTab:
             if '仕入れ先名' in purchase_clean.columns:
                 purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先名'].apply(clean_company_name)
 
+            # 仕入れ用カテゴリーのクリーニング
+            def clean_purchase_category(value):
+                if pd.isna(value) or value == "" or value == "不明":
+                    return "その他"
+                value_str = str(value).strip()
+                if value_str in ["市場", "ネット", "その他"]:
+                    return value_str
+                # 従来の値は「その他」に分類（またはマッピングルールがあればここに追加）
+                return "その他"
+
             # カテゴリー情報を取得（仕入データにも追加）
             if '仕入れ先カテゴリ' in purchase_clean.columns:
-                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_category)
+                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_purchase_category)
             else:
-                purchase_clean['仕入れ先カテゴリー_clean'] = "小売"
+                purchase_clean['仕入れ先カテゴリー_clean'] = "その他"
 
-            # 仕入データから企業カテゴリーマッピングを更新
+            # 仕入専用の企業カテゴリーマッピングを作成
+            purchase_company_category_map = {}
             for _, row in purchase_clean[['仕入れ先_clean', '仕入れ先カテゴリー_clean']].drop_duplicates().iterrows():
                 company = row['仕入れ先_clean']
                 category = row['仕入れ先カテゴリー_clean']
                 if company and company != '不明':
-                    if company not in company_category_map:
-                        company_category_map[company] = category
+                    if company not in purchase_company_category_map:
+                        purchase_company_category_map[company] = category
 
             # ピボットテーブル作成
             pivot3 = purchase_clean.pivot_table(
@@ -844,6 +855,30 @@ class ExportTab:
                 aggfunc='sum',
                 fill_value=0
             )
+            
+            # 仕入れ用カテゴリーのクリーニング（再定義またはスコープ外の場合は定義必要だが、ここではシンプルにInlineまたは再利用）
+            def clean_purchase_category_fb(value):
+                if pd.isna(value) or value == "" or value == "不明":
+                    return "その他"
+                value_str = str(value).strip()
+                if value_str in ["市場", "ネット", "その他"]:
+                    return value_str
+                return "その他"
+
+            # 売却済みデータから仕入れカテゴリーマップを作成
+            purchase_company_category_map = {}
+            if '仕入れ先カテゴリ' in df_clean.columns:
+                temp_cats = df_clean[['仕入れ先_clean', '仕入れ先カテゴリ']].drop_duplicates()
+                for _, row in temp_cats.iterrows():
+                    company = row['仕入れ先_clean']
+                    raw_cat = row['仕入れ先カテゴリ']
+                    clean_cat = clean_purchase_category_fb(raw_cat)
+                    if company and company != '不明':
+                        if company not in purchase_company_category_map:
+                            purchase_company_category_map[company] = clean_cat
+            else:
+                 # 全部その他
+                 pass
 
         # 月の列を正しい順序で並べ替え、存在しない月は0で埋める
         pivot_list = [pivot1, pivot2, pivot3]
@@ -879,12 +914,16 @@ class ExportTab:
 
         # 仕入れ高のカテゴリー別集計
         category_purchase = {}
-        for category in ['市場', '業販', '小売']:
+        # 仕入れのみ変更：市場、ネット、その他
+        for category in ['市場', 'ネット', 'その他']:
             category_purchase[category] = {}
             for month in months:
                 category_purchase[category][month] = 0
                 for company in pivot_list[2].index:
-                    if company_category_map.get(company) == category:
+                    # purchase_company_category_mapを使用。なければ「その他」
+                    # フォールバックとしてcompany_category_mapを見るべきではない（カテゴリー体系が異なるため）
+                    cat = purchase_company_category_map.get(company, "その他")
+                    if cat == category:
                         category_purchase[category][month] += pivot_list[2].loc[company, month]
 
         # 仕入データ（purchase_clean）を返すために保存
@@ -1009,18 +1048,28 @@ class ExportTab:
             purchase_clean['仕入れ原価_数値'] = purchase_clean['仕入れ原価'].apply(clean_currency)
             purchase_clean['仕入れ先_clean'] = purchase_clean['仕入れ先名'].apply(clean_company_name) if '仕入れ先名' in purchase_clean.columns else purchase_clean['仕入れ先'].apply(clean_company_name)
 
-            if '仕入れ先カテゴリ' in purchase_clean.columns:
-                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_category)
-            else:
-                purchase_clean['仕入れ先カテゴリー_clean'] = "小売"
+            # 仕入れ用カテゴリーのクリーニング
+            def clean_purchase_category(value):
+                if pd.isna(value) or value == "" or value == "不明":
+                    return "その他"
+                value_str = str(value).strip()
+                if value_str in ["市場", "ネット", "その他"]:
+                    return value_str
+                return "その他"
 
-            # カテゴリーマッピングを更新
+            if '仕入れ先カテゴリ' in purchase_clean.columns:
+                purchase_clean['仕入れ先カテゴリー_clean'] = purchase_clean['仕入れ先カテゴリ'].apply(clean_purchase_category)
+            else:
+                purchase_clean['仕入れ先カテゴリー_clean'] = "その他"
+
+            # 仕入専用マップ作成
+            purchase_company_category_map = {}
             for _, row in purchase_clean[['仕入れ先_clean', '仕入れ先カテゴリー_clean']].drop_duplicates().iterrows():
                 company = row['仕入れ先_clean']
                 category = row['仕入れ先カテゴリー_clean']
                 if company and company != '不明':
-                    if company not in company_category_map:
-                        company_category_map[company] = category
+                    if company not in purchase_company_category_map:
+                        purchase_company_category_map[company] = category
 
             purchase_total = purchase_clean.groupby('仕入れ先_clean')['仕入れ原価_数値'].sum()
             pivot3 = pd.DataFrame({'合計': purchase_total})
@@ -1028,15 +1077,35 @@ class ExportTab:
             purchase_total = df_clean.groupby('仕入れ先_clean')['仕入れ原価_数値'].sum()
             pivot3 = pd.DataFrame({'合計': purchase_total})
 
+            # fallback map
+            purchase_company_category_map = {}
+            def clean_purchase_category_fb(value):
+                if pd.isna(value) or value == "" or value == "不明":
+                    return "その他"
+                value_str = str(value).strip()
+                if value_str in ["市場", "ネット", "その他"]:
+                    return value_str
+                return "その他"
+            
+            if '仕入れ先カテゴリ' in df_clean.columns:
+                temp_cats = df_clean[['仕入れ先_clean', '仕入れ先カテゴリ']].drop_duplicates()
+                for _, row in temp_cats.iterrows():
+                    company = row['仕入れ先_clean']
+                    raw_cat = row['仕入れ先カテゴリ']
+                    clean_cat = clean_purchase_category_fb(raw_cat)
+                    if company and company != '不明':
+                        if company not in purchase_company_category_map:
+                            purchase_company_category_map[company] = clean_cat
+
         # カテゴリー別集計
         category_sales = {}
         category_profit = {}
         category_purchase = {}
 
+        # 売上・利益（従来通り）
         for category in ['市場', '業販', '小売']:
             category_sales[category] = {'合計': 0}
             category_profit[category] = {'合計': 0}
-            category_purchase[category] = {'合計': 0}
 
             for company in pivot1.index:
                 if company_category_map.get(company) == category:
@@ -1046,8 +1115,12 @@ class ExportTab:
                 if company_category_map.get(company) == category:
                     category_profit[category]['合計'] += pivot2.loc[company, '合計']
 
+        # 仕入れ（変更あり）
+        for category in ['市場', 'ネット', 'その他']:
+            category_purchase[category] = {'合計': 0}
             for company in pivot3.index:
-                if company_category_map.get(company) == category:
+                cat = purchase_company_category_map.get(company, "その他")
+                if cat == category:
                     category_purchase[category]['合計'] += pivot3.loc[company, '合計']
 
         # 仕入データを保存
@@ -1427,7 +1500,7 @@ class ExportTab:
                                 current_row += 1
 
                         elif section_name == '企業別仕入高' and category_purchase:
-                            for category in ['市場', '業販', '小売']:
+                            for category in ['市場', 'ネット', 'その他']:
                                 ws.cell(row=current_row, column=1, value=f"{category}合計")
                                 ws.cell(row=current_row, column=1).font = Font(bold=True)
                                 ws.cell(row=current_row, column=1).fill = category_fill
@@ -1698,7 +1771,7 @@ class ExportTab:
                                 current_row += 1
 
                         elif section_name == '企業別仕入高' and category_purchase:
-                            for category in ['市場', '業販', '小売']:
+                            for category in ['市場', 'ネット', 'その他']:
                                 ws.cell(row=current_row, column=1, value=f"{category}合計")
                                 ws.cell(row=current_row, column=1).font = Font(bold=True)
                                 ws.cell(row=current_row, column=1).fill = category_fill
