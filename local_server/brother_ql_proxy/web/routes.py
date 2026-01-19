@@ -167,12 +167,16 @@ def create_flask_app(proxy):
                 # 既に文字列の場合
                 ngrok_url = str(proxy.ngrok_url)
         
+        # Secret Key設定状態を確認
+        secret_key_configured = bool(proxy.config.get('secret_key', ''))
+
         response_data = {
             "proxy_status": "online",
             "printer_ip": proxy.config.get('printer_ip', 'なし'),
             "printer_port": proxy.config.get('printer_port', 9100),
             "printer_connected": test_result.get('connected', False),
             "ngrok_url": ngrok_url,
+            "secret_key_configured": secret_key_configured,
             "timestamp": datetime.now().isoformat(),
             "test_result": test_result  # デバッグ用
         }
@@ -620,32 +624,18 @@ WEB_INTERFACE_HTML = '''
             </div>
         </div>
         
-        <div class="api-section">
-            <h3>API エンドポイント</h3>
-            <div class="api-endpoint">POST /print/raw - 生データ印刷</div>
-            <div class="api-endpoint">POST /print/label - ラベル印刷</div>
-            <div class="api-endpoint">POST /print/test - シンプルテスト印刷</div>
-            <div class="api-endpoint">GET /status - ステータス確認</div>
-            <div class="api-endpoint">POST /notion/webhook - Notionウェブフック</div>
-            <div class="api-endpoint">POST /notion/preview - Notionプレビュー生成</div>
-            <div class="api-endpoint">POST /notion/print - Notion印刷</div>
-            
-            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 8px;">
-                <h4 style="margin-top: 0; color: #856404;">🔒 外部アクセス認証</h4>
-                <p style="margin-bottom: 10px; color: #856404; font-size: 14px;">
-                    外部からのアクセス時は以下のヘッダーでSecret Keyが必要です：
-                </p>
-                <div style="font-family: monospace; font-size: 12px; color: #856404;">
-                    • ヘッダー: <code>secret: your-secret-key</code>
-                </div>
-                <p style="margin-top: 10px; margin-bottom: 0; color: #856404; font-size: 12px;">
-                    ローカルアクセス（192.168.x.x, 10.x.x.x, 172.x.x.x, 127.0.0.1）は認証不要
-                </p>
-            </div>
-            
-            <div style="margin-top: 20px; text-align: right;">
-                <button onclick="simpleTest()" style="font-size: 11px; padding: 4px 12px; background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; border-radius: 3px; cursor: pointer;">接続テスト</button>
-            </div>
+        <div id="secret-warning" style="display: none; margin-top: 20px; padding: 15px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 8px;">
+            <h4 style="margin-top: 0; color: #721c24;">⚠️ セキュリティ警告</h4>
+            <p style="margin-bottom: 10px; color: #721c24; font-size: 14px;">
+                Secret Keyが設定されていません。外部からのアクセスは拒否されます。
+            </p>
+            <p style="margin-bottom: 0; color: #721c24; font-size: 12px;">
+                設定タブでSecret Keyを設定してください。
+            </p>
+        </div>
+
+        <div style="margin-top: 20px; text-align: right;">
+            <button onclick="simpleTest()" style="font-size: 11px; padding: 4px 12px; background-color: #f8f9fa; color: #6c757d; border: 1px solid #dee2e6; border-radius: 3px; cursor: pointer;">接続テスト</button>
         </div>
     </div>
     
@@ -662,6 +652,12 @@ WEB_INTERFACE_HTML = '''
                 } else {
                     statusDiv.className = 'status offline';
                     statusDiv.textContent = '❌ プリンター未接続';
+                }
+
+                // Secret Key未設定の警告を表示/非表示
+                const secretWarning = document.getElementById('secret-warning');
+                if (secretWarning) {
+                    secretWarning.style.display = data.secret_key_configured ? 'none' : 'block';
                 }
             } catch (e) {
                 console.error(e);
