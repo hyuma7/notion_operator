@@ -1,12 +1,26 @@
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 from notion_client import Client
-from typing import List, Dict, Any, Optional, Tuple
+from notion_client.errors import APIResponseError
+from typing import List, Dict, Any, Optional, Tuple, Callable
 from openpyxl import Workbook
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
 from .schemas import SoldRecord, PurchaseRecord
 
+
+class FetchCancelled(Exception):
+    """データ取得がキャンセルされた場合の例外"""
+    pass
+
+
 class ExportService:
+    # レート制限の設定
+    MAX_RETRIES = 5
+    INITIAL_RETRY_DELAY = 1.0  # 秒
+    MAX_RETRY_DELAY = 60.0  # 秒
+    REQUEST_DELAY = 0.35  # リクエスト間の待機時間（秒）- Notion APIは約3リクエスト/秒
+
     def __init__(self, api_key: str, database_id: str):
         self.api_key = api_key
         self.database_id = database_id
@@ -15,16 +29,117 @@ class ExportService:
         else:
             self.notion = None
 
+        # キャンセルフラグ
+        self._cancelled = False
+        # 進捗コールバック
+        self._progress_callback: Optional[Callable[[int, int, str], None]] = None
+
+    def set_progress_callback(self, callback: Optional[Callable[[int, int, str], None]]):
+        """進捗コールバックを設定
+
+        Args:
+            callback: (current, total, message) を受け取るコールバック関数
+        """
+        self._progress_callback = callback
+
+    def cancel(self):
+        """データ取得をキャンセル"""
+        self._cancelled = True
+
+    def reset_cancel(self):
+        """キャンセルフラグをリセット"""
+        self._cancelled = False
+
+    def _check_cancelled(self):
+        """キャンセルされていたら例外を発生"""
+        if self._cancelled:
+            raise FetchCancelled("データ取得がキャンセルされました")
+
+    def _report_progress(self, current: int, total: int, message: str):
+        """進捗を報告"""
+        if self._progress_callback:
+            self._progress_callback(current, total, message)
+
+    def _query_with_retry(self, query_params: Dict[str, Any]) -> Dict[str, Any]:
+        """リトライロジック付きでNotion APIをクエリ
+
+        Args:
+            query_params: databases.queryに渡すパラメータ
+
+        Returns:
+            APIレスポンス
+
+        Raises:
+            FetchCancelled: キャンセルされた場合
+            APIResponseError: リトライ回数を超えた場合
+        """
+        retry_delay = self.INITIAL_RETRY_DELAY
+
+        for attempt in range(self.MAX_RETRIES):
+            self._check_cancelled()
+
+            try:
+                result = self.notion.databases.query(**query_params)
+                # 成功したらリクエスト間の待機
+                time.sleep(self.REQUEST_DELAY)
+                return result
+
+            except APIResponseError as e:
+                if e.status == 429:  # Rate limited
+                    # Retry-Afterヘッダーがあれば使用
+                    retry_after = getattr(e, 'retry_after', None)
+                    wait_time = float(retry_after) if retry_after else retry_delay
+                    wait_time = min(wait_time, self.MAX_RETRY_DELAY)
+
+                    self._report_progress(
+                        -1, -1,
+                        f"レート制限のため {wait_time:.1f}秒待機中... (リトライ {attempt + 1}/{self.MAX_RETRIES})"
+                    )
+
+                    # 待機中もキャンセルチェック
+                    wait_end = time.time() + wait_time
+                    while time.time() < wait_end:
+                        self._check_cancelled()
+                        time.sleep(0.5)
+
+                    # エクスポネンシャルバックオフ
+                    retry_delay = min(retry_delay * 2, self.MAX_RETRY_DELAY)
+                else:
+                    # 429以外のエラーは即座に再スロー
+                    raise
+
+        # リトライ回数を超過
+        raise APIResponseError(f"リトライ回数({self.MAX_RETRIES})を超過しました")
+
     def fetch_sales_data(self, start_date: str, end_date: str) -> List[SoldRecord]:
-        """Fetch sold items from Notion within the date range"""
+        """Fetch sold items from Notion within the date range
+
+        Args:
+            start_date: 開始日 (YYYY-MM-DD形式)
+            end_date: 終了日 (YYYY-MM-DD形式)
+
+        Returns:
+            SoldRecordのリスト
+
+        Raises:
+            FetchCancelled: キャンセルされた場合
+            ValueError: API Key/Database IDが未設定の場合
+        """
         if not self.notion or not self.database_id:
             raise ValueError("API Key or Database ID not set")
+
+        self._check_cancelled()
 
         all_results = []
         has_more = True
         start_cursor = None
+        page_count = 0
+
+        self._report_progress(0, -1, "売上データを取得中...")
 
         while has_more:
+            self._check_cancelled()
+
             query_params = {
                 "database_id": self.database_id,
                 "filter": {
@@ -39,10 +154,16 @@ class ExportService:
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
 
-            results = self.notion.databases.query(**query_params)
+            results = self._query_with_retry(query_params)
             all_results.extend(results["results"])
             has_more = results.get("has_more", False)
             start_cursor = results.get("next_cursor")
+
+            page_count += 1
+            self._report_progress(
+                len(all_results), -1,
+                f"売上データを取得中... ({len(all_results)}件取得済み)"
+            )
 
         # Parse and validate
         records = []
@@ -61,18 +182,37 @@ class ExportService:
         return records
 
     def fetch_purchase_data(self, start_date: str, end_date: str) -> List[PurchaseRecord]:
-        """Fetch all items from Notion created within the date range"""
+        """Fetch all items from Notion created within the date range
+
+        Args:
+            start_date: 開始日 (YYYY-MM-DD形式)
+            end_date: 終了日 (YYYY-MM-DD形式)
+
+        Returns:
+            PurchaseRecordのリスト
+
+        Raises:
+            FetchCancelled: キャンセルされた場合
+            ValueError: API Key/Database IDが未設定の場合
+        """
         if not self.notion or not self.database_id:
             raise ValueError("API Key or Database ID not set")
+
+        self._check_cancelled()
 
         all_results = []
         has_more = True
         start_cursor = None
+        page_count = 0
 
         start_dt = pd.to_datetime(start_date, utc=True)
         end_dt = pd.to_datetime(end_date, utc=True)
 
+        self._report_progress(0, -1, "仕入データを取得中...")
+
         while has_more:
+            self._check_cancelled()
+
             query_params = {
                 "database_id": self.database_id,
                 "page_size": 100
@@ -80,10 +220,16 @@ class ExportService:
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
 
-            results = self.notion.databases.query(**query_params)
+            results = self._query_with_retry(query_params)
             all_results.extend(results["results"])
             has_more = results.get("has_more", False)
             start_cursor = results.get("next_cursor")
+
+            page_count += 1
+            self._report_progress(
+                len(all_results), -1,
+                f"仕入データを取得中... ({len(all_results)}件取得済み)"
+            )
 
         records = []
         for page in all_results:
