@@ -10,3 +10,5 @@ ENV/
 *.spec
 printer_proxy_config.json
 tests/data/
+build
+dist

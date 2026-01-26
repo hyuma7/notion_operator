@@ -25,8 +25,9 @@ class SoldRecord(NotionRecord):
     
     supplier_category: str = Field(alias="仕入先カテゴリ", default="その他")
     sales_channel_category: str = Field(alias="販売先カテゴリ", default="その他")
-    
+
     assignee: Optional[str] = Field(alias="作業担当", default=None)
+    sales_assignee: Optional[str] = Field(alias="販売担当者", default=None)  # ロールアップ
 
     @field_validator('sales_amount', 'profit', 'cost_price', 'commission', 'shipping_cost', mode='before')
     @classmethod

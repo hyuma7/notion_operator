@@ -390,17 +390,43 @@ class ExportService:
                 if row['supplier'] and row['supplier'] != '不明':
                     purchase_company_category_map.setdefault(row['supplier'], row['supplier_category'])
 
+        # カテゴリ定義: 市場・業販 vs 小売り
+        wholesale_categories = {'市場', '業販', 'ネット'}  # 市場・業販カテゴリ
+        retail_categories = {'小売', '小売り'}  # 小売りカテゴリ
+
         # --- Pivot 1: Sales (販売媒体のみ) ---
         pivot_sales = pd.DataFrame()
+        pivot_sales_wholesale = pd.DataFrame()  # 市場・業販
+        pivot_sales_retail = pd.DataFrame()     # 小売り
         if not df_sales.empty:
             # 販売媒体の売上のみ
             pivot_sales = df_sales.pivot_table(index='sales_channel', columns='sold_year_month', values='sales_amount', aggfunc='sum', fill_value=0)
 
+            # 市場・業販の売上
+            df_wholesale = df_sales[df_sales['sales_channel_category'].isin(wholesale_categories)]
+            if not df_wholesale.empty:
+                pivot_sales_wholesale = df_wholesale.pivot_table(index='sales_channel', columns='sold_year_month', values='sales_amount', aggfunc='sum', fill_value=0)
+
+            # 小売りの売上
+            df_retail = df_sales[df_sales['sales_channel_category'].isin(retail_categories)]
+            if not df_retail.empty:
+                pivot_sales_retail = df_retail.pivot_table(index='sales_channel', columns='sold_year_month', values='sales_amount', aggfunc='sum', fill_value=0)
+
         # --- Pivot 2: Profit (販売媒体のみ) ---
         pivot_profit = pd.DataFrame()
+        pivot_profit_wholesale = pd.DataFrame()  # 市場・業販
+        pivot_profit_retail = pd.DataFrame()     # 小売り
         if not df_sales.empty:
             # 販売媒体の利益のみ
             pivot_profit = df_sales.pivot_table(index='sales_channel', columns='sold_year_month', values='profit', aggfunc='sum', fill_value=0)
+
+            # 市場・業販の利益
+            if not df_wholesale.empty:
+                pivot_profit_wholesale = df_wholesale.pivot_table(index='sales_channel', columns='sold_year_month', values='profit', aggfunc='sum', fill_value=0)
+
+            # 小売りの利益
+            if not df_retail.empty:
+                pivot_profit_retail = df_retail.pivot_table(index='sales_channel', columns='sold_year_month', values='profit', aggfunc='sum', fill_value=0)
 
         # --- Pivot 3: Purchase Cost ---
         pivot_purchase = pd.DataFrame()
@@ -413,7 +439,12 @@ class ExportService:
             purchase_company_category_map = {k: v for k, v in company_category_map.items()} # Simplification
 
         # Ensure all months are present in columns
-        for pivot in [pivot_sales, pivot_profit, pivot_purchase]:
+        all_pivots = [
+            pivot_sales, pivot_profit, pivot_purchase,
+            pivot_sales_wholesale, pivot_sales_retail,
+            pivot_profit_wholesale, pivot_profit_retail
+        ]
+        for pivot in all_pivots:
             if not pivot.empty:
                 for m in months:
                     if m not in pivot.columns:
@@ -431,17 +462,31 @@ class ExportService:
 
         category_sales = self._aggregate_by_category(pivot_sales, company_category_map, months, category_list, default_cat="その他")
         category_profit = self._aggregate_by_category(pivot_profit, company_category_map, months, category_list, default_cat="その他")
-        category_purchase = self._aggregate_by_category(pivot_purchase, purchase_company_category_map, months, category_list, default_cat="その他")
+
+        # 仕入高用のカテゴリ別集計（小売りを除外）
+        purchase_category_list = sorted([c for c in category_list if c not in retail_categories])
+        category_purchase = self._aggregate_by_category(pivot_purchase, purchase_company_category_map, months, purchase_category_list, default_cat="その他")
+
+        # 市場・業販用のカテゴリ別集計（市場計、業販計、ネット計）
+        wholesale_category_list = sorted([c for c in wholesale_categories if c in company_category_map.values()])
+        category_sales_wholesale = self._aggregate_by_category(pivot_sales_wholesale, company_category_map, months, wholesale_category_list, default_cat=None)
+        category_profit_wholesale = self._aggregate_by_category(pivot_profit_wholesale, company_category_map, months, wholesale_category_list, default_cat=None)
 
         return {
             'pivot_sales': pivot_sales,
             'pivot_profit': pivot_profit,
             'pivot_purchase': pivot_purchase,
+            'pivot_sales_wholesale': pivot_sales_wholesale,
+            'pivot_sales_retail': pivot_sales_retail,
+            'pivot_profit_wholesale': pivot_profit_wholesale,
+            'pivot_profit_retail': pivot_profit_retail,
             'company_category_map': company_category_map,
             'purchase_company_category_map': purchase_company_category_map,
             'category_sales': category_sales,
             'category_profit': category_profit,
             'category_purchase': category_purchase,
+            'category_sales_wholesale': category_sales_wholesale,
+            'category_profit_wholesale': category_profit_wholesale,
             'sales_records': df_sales,
             'purchase_records': df_purchases
         }
@@ -519,39 +564,44 @@ class ExportService:
              
              current_row += 1
 
-        # 2. Pivot Sections
+        # 2. Pivot Sections - 4分割（市場・業販 / 小売り）+ 仕入高
         sections = [
-            ("企業別売上", data.get('pivot_sales'), data.get('category_sales')),
-            ("企業別販売利益", data.get('pivot_profit'), data.get('category_profit')),
+            ("企業別売上(市場・業販)", data.get('pivot_sales_wholesale'), data.get('category_sales_wholesale')),
+            ("企業別販売利益(市場・業販)", data.get('pivot_profit_wholesale'), data.get('category_profit_wholesale')),
+            ("企業別売上(小売り)", data.get('pivot_sales_retail'), None),
+            ("企業別販売利益(小売り)", data.get('pivot_profit_retail'), None),
             ("企業別仕入高", data.get('pivot_purchase'), data.get('category_purchase')),
         ]
 
-        # Assignee mapping - セクションごとに分離
-        # 売上・利益用：販売媒体のみ
-        sales_assignee_map = {}
+        # Assignee mapping - 販売担当者（ロールアップ）を使用してカテゴリごとに分離
+        # カテゴリ定義
+        wholesale_categories = {'市場', '業販', 'ネット'}  # 市場・業販カテゴリ
+        retail_categories = {'小売', '小売り'}  # 小売りカテゴリ
+
+        # 市場・業販用：担当者マッピング
+        wholesale_assignee_map = {}
+        # 小売り用：担当者マッピング
+        retail_assignee_map = {}
+
         if df_sales is not None and not df_sales.empty:
             for _, r in df_sales.iterrows():
-                assignee = r.get('assignee')
+                # 販売担当者（ロールアップ）を使用
+                sales_assignee = r.get('sales_assignee')
                 sales_channel = r.get('sales_channel')
-                if assignee and sales_channel and sales_channel != '不明':
-                    if assignee not in sales_assignee_map:
-                        sales_assignee_map[assignee] = set()
-                    sales_assignee_map[assignee].add(sales_channel)
-
-        # 仕入高用：仕入れ先のみ
-        purchase_assignee_map = {}
-        if data.get('purchase_records') is not None and not data.get('purchase_records').empty:
-            for _, r in data.get('purchase_records').iterrows():
-                assignee = r.get('assignee')
-                supplier = r.get('supplier')
-                if assignee and supplier and supplier != '不明':
-                    if assignee not in purchase_assignee_map:
-                        purchase_assignee_map[assignee] = set()
-                    purchase_assignee_map[assignee].add(supplier)
+                category = r.get('sales_channel_category', '')
+                if sales_assignee and sales_channel and sales_channel != '不明':
+                    if category in wholesale_categories:
+                        if sales_assignee not in wholesale_assignee_map:
+                            wholesale_assignee_map[sales_assignee] = set()
+                        wholesale_assignee_map[sales_assignee].add(sales_channel)
+                    elif category in retail_categories:
+                        if sales_assignee not in retail_assignee_map:
+                            retail_assignee_map[sales_assignee] = set()
+                        retail_assignee_map[sales_assignee].add(sales_channel)
 
         # Sort lists
-        sales_assignee_map = {k: sorted(list(v)) for k, v in sales_assignee_map.items()}
-        purchase_assignee_map = {k: sorted(list(v)) for k, v in purchase_assignee_map.items()}
+        wholesale_assignee_map = {k: sorted(list(v)) for k, v in wholesale_assignee_map.items()}
+        retail_assignee_map = {k: sorted(list(v)) for k, v in retail_assignee_map.items()}
 
         assignee_colors = [
             PatternFill(start_color="E6F3FF", end_color="E6F3FF", fill_type="solid"),
@@ -567,10 +617,12 @@ class ExportService:
                 continue
 
             # セクションごとに適切な担当者マップを選択
-            if title == "企業別仕入高":
-                assignee_map = purchase_assignee_map
-            else:  # 企業別売上、企業別販売利益
-                assignee_map = sales_assignee_map
+            if '市場・業販' in title:
+                assignee_map = wholesale_assignee_map
+            elif '小売り' in title:
+                assignee_map = retail_assignee_map
+            else:
+                assignee_map = {}
 
             ws.cell(row=current_row, column=1, value=title).font = Font(bold=True, size=14)
             current_row += 1
@@ -585,20 +637,20 @@ class ExportService:
             ws.cell(row=current_row, column=len(months)+2, value="計").fill = header_fill
             current_row += 1
 
-            # Body (Grouped by Assignee)
-            used_companies = set()
-            if assignee_map:
-                color_idx = 0
-                for assignee, companies in sorted(assignee_map.items()):
-                    fill = assignee_colors[color_idx % len(assignee_colors)]
-                    color_idx += 1
-                    
-                    subtotal = {m: 0.0 for m in months}
-                    
-                    has_rows = False
-                    for company in companies:
-                        if company in pivot.index:
-                            has_rows = True
+            # 仕入高セクションは特別な並び（企業→カテゴリ小計）
+            if title == "企業別仕入高" and cats:
+                purchase_category_map = data.get('purchase_company_category_map', {})
+                used_companies = set()
+
+                # カテゴリ順序を定義（市場、ネット、業販、その他）
+                category_order = ['市場', 'ネット', '業販', 'その他']
+                sorted_cats = sorted(cats.items(), key=lambda x: category_order.index(x[0]) if x[0] in category_order else 999)
+
+                for cat_name, cat_vals in sorted_cats:
+                    # そのカテゴリに属する企業を先に出力
+                    for company in pivot.index:
+                        company_cat = purchase_category_map.get(company, 'その他')
+                        if company_cat == cat_name and company not in used_companies:
                             used_companies.add(company)
                             ws.cell(row=current_row, column=1, value=company)
                             row_total = 0
@@ -607,47 +659,10 @@ class ExportService:
                                 c = ws.cell(row=current_row, column=i, value=val)
                                 c.number_format = '#,##0'
                                 row_total += val
-                                subtotal[m] += val
-                            
                             ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
                             current_row += 1
-                    
-                    if has_rows:
-                        # Subtotal row (ユーザー別小計)
-                        label = f"{assignee}計"
-                        c_label = ws.cell(row=current_row, column=1, value=label)
-                        c_label.fill = fill
-                        c_label.font = bold_font
-                        grand_subtotal = 0
-                        for i, m in enumerate(months, 2):
-                            val = subtotal[m]
-                            c = ws.cell(row=current_row, column=i, value=val)
-                            c.number_format = '#,##0'
-                            c.fill = fill
-                            c.font = bold_font
-                            grand_subtotal += val
-                        c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_subtotal)
-                        c_total.fill = fill
-                        c_total.font = bold_font
-                        c_total.number_format = '#,##0'
-                        current_row += 1
 
-            # Remaining companies
-            remaining = [c for c in pivot.index if c not in used_companies]
-            for company in remaining:
-                ws.cell(row=current_row, column=1, value=company)
-                row_total = 0
-                for i, m in enumerate(months, 2):
-                    val = pivot.loc[company, m] if m in pivot.columns else 0
-                    c = ws.cell(row=current_row, column=i, value=val)
-                    c.number_format = '#,##0'
-                    row_total += val
-                ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
-                current_row += 1
-
-            # Category Totals (カテゴリ別小計)
-            if cats:
-                for cat_name, cat_vals in sorted(cats.items()):
+                    # カテゴリ小計を後に出力
                     c_label = ws.cell(row=current_row, column=1, value=f"{cat_name}計")
                     c_label.fill = category_fill
                     c_label.font = bold_font
@@ -664,6 +679,86 @@ class ExportService:
                     c_total.font = bold_font
                     c_total.number_format = '#,##0'
                     current_row += 1
+            else:
+                # 通常のセクション（担当者別グループ）
+                used_companies = set()
+                if assignee_map:
+                    color_idx = 0
+                    for assignee, companies in sorted(assignee_map.items()):
+                        fill = assignee_colors[color_idx % len(assignee_colors)]
+                        color_idx += 1
+
+                        subtotal = {m: 0.0 for m in months}
+
+                        has_rows = False
+                        for company in companies:
+                            if company in pivot.index:
+                                has_rows = True
+                                used_companies.add(company)
+                                ws.cell(row=current_row, column=1, value=company)
+                                row_total = 0
+                                for i, m in enumerate(months, 2):
+                                    val = pivot.loc[company, m] if m in pivot.columns else 0
+                                    c = ws.cell(row=current_row, column=i, value=val)
+                                    c.number_format = '#,##0'
+                                    row_total += val
+                                    subtotal[m] += val
+
+                                ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
+                                current_row += 1
+
+                        if has_rows:
+                            # Subtotal row (ユーザー別小計)
+                            label = f"{assignee}計"
+                            c_label = ws.cell(row=current_row, column=1, value=label)
+                            c_label.fill = fill
+                            c_label.font = bold_font
+                            grand_subtotal = 0
+                            for i, m in enumerate(months, 2):
+                                val = subtotal[m]
+                                c = ws.cell(row=current_row, column=i, value=val)
+                                c.number_format = '#,##0'
+                                c.fill = fill
+                                c.font = bold_font
+                                grand_subtotal += val
+                            c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_subtotal)
+                            c_total.fill = fill
+                            c_total.font = bold_font
+                            c_total.number_format = '#,##0'
+                            current_row += 1
+
+                # Remaining companies
+                remaining = [c for c in pivot.index if c not in used_companies]
+                for company in remaining:
+                    ws.cell(row=current_row, column=1, value=company)
+                    row_total = 0
+                    for i, m in enumerate(months, 2):
+                        val = pivot.loc[company, m] if m in pivot.columns else 0
+                        c = ws.cell(row=current_row, column=i, value=val)
+                        c.number_format = '#,##0'
+                        row_total += val
+                    ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
+                    current_row += 1
+
+                # Category Totals (カテゴリ別小計) - 仕入高以外
+                if cats:
+                    for cat_name, cat_vals in sorted(cats.items()):
+                        c_label = ws.cell(row=current_row, column=1, value=f"{cat_name}計")
+                        c_label.fill = category_fill
+                        c_label.font = bold_font
+                        row_total = 0
+                        for i, m in enumerate(months, 2):
+                            val = cat_vals.get(m, 0)
+                            c = ws.cell(row=current_row, column=i, value=val)
+                            c.number_format = '#,##0'
+                            c.fill = category_fill
+                            c.font = bold_font
+                            row_total += val
+                        c_total = ws.cell(row=current_row, column=len(months)+2, value=row_total)
+                        c_total.fill = category_fill
+                        c_total.font = bold_font
+                        c_total.number_format = '#,##0'
+                        current_row += 1
 
             # Grand Total (総計)
             c_label = ws.cell(row=current_row, column=1, value="合計")
