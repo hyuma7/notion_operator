@@ -637,9 +637,12 @@ class ExportService:
             ws.cell(row=current_row, column=len(months)+2, value="計").fill = header_fill
             current_row += 1
 
-            # 仕入高セクションは特別な並び（企業→カテゴリ小計）
-            if title == "企業別仕入高" and cats:
-                purchase_category_map = data.get('purchase_company_category_map', {})
+            # 仕入高・市場/業販セクションは企業→カテゴリ小計の並び
+            if (title == "企業別仕入高" or '市場・業販' in title) and cats:
+                if title == "企業別仕入高":
+                    category_map_for_section = data.get('purchase_company_category_map', {})
+                else:
+                    category_map_for_section = data.get('company_category_map', {})
                 used_companies = set()
 
                 # カテゴリ順序を定義（市場、ネット、業販、その他）
@@ -649,7 +652,7 @@ class ExportService:
                 for cat_name, cat_vals in sorted_cats:
                     # そのカテゴリに属する企業を先に出力
                     for company in pivot.index:
-                        company_cat = purchase_category_map.get(company, 'その他')
+                        company_cat = category_map_for_section.get(company, 'その他')
                         if company_cat == cat_name and company not in used_companies:
                             used_companies.add(company)
                             ws.cell(row=current_row, column=1, value=company)
@@ -679,6 +682,41 @@ class ExportService:
                     c_total.font = bold_font
                     c_total.number_format = '#,##0'
                     current_row += 1
+
+                # 市場・業販の場合はユーザー計を合計の上にまとめて出力
+                if '市場・業販' in title and assignee_map:
+                    for assignee, companies in sorted(assignee_map.items()):
+                        # 担当者の小計を計算
+                        subtotal = {m: 0.0 for m in months}
+                        has_data = False
+                        for company in companies:
+                            if company in pivot.index:
+                                has_data = True
+                                for m in months:
+                                    if m in pivot.columns:
+                                        subtotal[m] += pivot.loc[company, m]
+
+                        if has_data:
+                            color_idx = list(sorted(assignee_map.keys())).index(assignee)
+                            fill = assignee_colors[color_idx % len(assignee_colors)]
+
+                            label = f"{assignee}計"
+                            c_label = ws.cell(row=current_row, column=1, value=label)
+                            c_label.fill = fill
+                            c_label.font = bold_font
+                            grand_subtotal = 0
+                            for i, m in enumerate(months, 2):
+                                val = subtotal[m]
+                                c = ws.cell(row=current_row, column=i, value=val)
+                                c.number_format = '#,##0'
+                                c.fill = fill
+                                c.font = bold_font
+                                grand_subtotal += val
+                            c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_subtotal)
+                            c_total.fill = fill
+                            c_total.font = bold_font
+                            c_total.number_format = '#,##0'
+                            current_row += 1
             else:
                 # 通常のセクション（担当者別グループ）
                 used_companies = set()
