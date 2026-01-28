@@ -297,10 +297,6 @@ class ExportService:
                 rollup = prop_value.get("rollup", {})
                 rollup_type = rollup.get("type")
 
-                # デバッグ出力
-                if prop_name in ["仕入れ先名", "販売媒体名", "仕入先カテゴリ", "販売先カテゴリ"]:
-                    print(f"DEBUG: {prop_name} rollup_type={rollup_type}, rollup={rollup}")
-
                 if rollup_type == "array":
                     array_data = rollup.get("array", [])
                     values = []
@@ -330,8 +326,6 @@ class ExportService:
                                     values.append(str(num_val))
                         # Add simplistic support for others
                     row[prop_name] = ", ".join(values) if values else ""
-                    if prop_name in ["仕入れ先名", "販売媒体名", "仕入先カテゴリ", "販売先カテゴリ"]:
-                        print(f"DEBUG: {prop_name} extracted values={values}, result={row[prop_name]}")
                 elif rollup_type == "number":
                     row[prop_name] = rollup.get("number", 0)
                 elif rollup_type == "date":
@@ -344,10 +338,6 @@ class ExportService:
                  people = prop_value.get("people", [])
                  names = [p.get("name", "") for p in people if p.get("name")]
                  row[prop_name] = ", ".join(names) if names else ""
-
-                 # デバッグ出力
-                 if prop_name == "作業担当":
-                     print(f"DEBUG: 作業担当 people={people}, names={names}, result={row[prop_name]}")
             # Add other types as needed
         return row
 
