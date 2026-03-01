@@ -5,11 +5,9 @@
 import os
 import json
 import socket
-import threading
 import logging
 from contextlib import contextmanager
-from typing import Dict, Any, Optional
-from werkzeug.serving import make_server
+from typing import Dict, Any
 
 from .config import CONFIG_FILE, DEFAULT_CONFIG, LOG_FILE
 
@@ -27,13 +25,7 @@ logging.basicConfig(
 class PrinterProxy:
     def __init__(self):
         self.config = self.load_config()
-        self.server = None
-        self.server_thread = None
-        self.ngrok_url = None  # 文字列として管理
-        self.running = False
-        self.print_queue = []
         self.log_callbacks = []
-        self.flask_app = None
         
     def load_config(self):
         """設定ファイルを読み込む"""
@@ -143,74 +135,3 @@ class PrinterProxy:
             self.log(f"印刷エラー: {e}", "ERROR")
             return False
     
-    def set_flask_app(self, app):
-        """Flaskアプリケーションを設定"""
-        self.flask_app = app
-    
-    def start_server(self):
-        """Flaskサーバーを開始"""
-        if self.running or not self.flask_app:
-            return
-        
-        self.running = True
-        self.server = make_server('0.0.0.0', self.config['proxy_port'], self.flask_app)
-        self.server_thread = threading.Thread(target=self.server.serve_forever)
-        self.server_thread.daemon = True
-        self.server_thread.start()
-        
-        self.log(f"プロキシサーバーをポート {self.config['proxy_port']} で開始しました")
-        
-        # ngrokを開始
-        if self.config.get('enable_ngrok') and self.config.get('ngrok_authtoken'):
-            self.start_ngrok()
-    
-    def stop_server(self):
-        """サーバーを停止"""
-        if self.server and self.running:
-            self.running = False
-            self.server.shutdown()
-            if self.server_thread:
-                self.server_thread.join(timeout=5)
-            self.server = None
-            self.server_thread = None
-            self.ngrok_url = None  # ngrok URLもクリア
-            self.log("プロキシサーバーを停止しました")
-    
-    def start_ngrok(self):
-        """ngrokトンネルを開始"""
-        try:
-            from pyngrok import ngrok
-            
-            ngrok.set_auth_token(self.config['ngrok_authtoken'])
-            
-            # 固定ドメインまたは予約済みドメインIDが設定されている場合
-            if self.config.get('ngrok_domain'):
-                # 固定ドメインを使用
-                tunnel = ngrok.connect(
-                    self.config['proxy_port'], 
-                    "http",
-                    hostname=self.config['ngrok_domain']
-                )
-                self.log(f"ngrokトンネルを固定ドメインで開始: {self.config['ngrok_domain']}")
-            elif self.config.get('ngrok_reserved_domain_id'):
-                # 予約済みドメインIDを使用
-                tunnel = ngrok.connect(
-                    self.config['proxy_port'], 
-                    "http",
-                    hostname=f"id:{self.config['ngrok_reserved_domain_id']}"
-                )
-                self.log(f"ngrokトンネルを予約済みドメインIDで開始: {self.config['ngrok_reserved_domain_id']}")
-            else:
-                # 通常のランダムドメイン
-                tunnel = ngrok.connect(self.config['proxy_port'], "http")
-                
-            # NgrokTunnelオブジェクトから公開URLを文字列として取得
-            self.ngrok_url = str(tunnel.public_url) if hasattr(tunnel, 'public_url') else str(tunnel)
-            self.log(f"ngrokトンネルを開始: {self.ngrok_url}")
-            
-        except ImportError:
-            self.log("ngrokモジュールがインストールされていません。pip install pyngrokを実行してください", "WARNING")
-            self.ngrok_url = None
-        except Exception as e:
-            self.log(f"ngrok開始エラー: {e}", "ERROR")
-            self.ngrok_url = None
