@@ -11,7 +11,8 @@
       "Bash(mv:*)",
       "Bash(find:*)",
       "Bash(git checkout:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "mcp__claude_ai_Notion__notion-fetch"
     ],
     "deny": []
   }

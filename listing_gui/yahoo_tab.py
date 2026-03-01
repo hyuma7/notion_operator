@@ -49,7 +49,6 @@ class YahooTab:
             "出品開始",
             icon=ft.Icons.SELL,
             on_click=self.on_start_listing,
-            disabled=True,
             bgcolor=ft.Colors.GREEN,
             color=ft.Colors.WHITE,
         )
@@ -61,6 +60,25 @@ class YahooTab:
             disabled=True,
             bgcolor=ft.Colors.RED,
             color=ft.Colors.WHITE,
+        )
+
+        # 出品内容プレビュー
+        self.preview_name = ft.Text("---", size=13, expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+        self.preview_price = ft.Text("---", size=13, color=ft.Colors.GREEN_700, weight=ft.FontWeight.BOLD)
+        self.preview_images = ft.Text("---", size=13)
+
+        self.preview_card = ft.Card(
+            content=ft.Container(
+                padding=ft.padding.all(15),
+                content=ft.Column([
+                    ft.Text("出品内容", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_GREY_600),
+                    ft.Divider(height=8),
+                    ft.Row([ft.Text("商品名:", size=13, width=75, color=ft.Colors.GREY_600), self.preview_name]),
+                    ft.Row([ft.Text("出品価格:", size=13, width=75, color=ft.Colors.GREY_600), self.preview_price]),
+                    ft.Row([ft.Text("画像:", size=13, width=75, color=ft.Colors.GREY_600), self.preview_images]),
+                ], spacing=6),
+            ),
+            visible=False,
         )
 
         # 実行ログ
@@ -90,6 +108,7 @@ class YahooTab:
                         ]),
                     )
                 ),
+                self.preview_card,
                 ft.Text("実行ログ", size=16, weight=ft.FontWeight.BOLD),
                 ft.Divider(),
                 self.log_column,
@@ -183,49 +202,120 @@ class YahooTab:
         thread = threading.Thread(target=do_login, daemon=True)
         thread.start()
 
+    def _update_preview(self, notion_data: dict):
+        """出品内容プレビューカードを更新"""
+        props = notion_data.get("properties", {})
+
+        name = props.get("商品名", {}).get("value") or "---"
+        price = props.get("売上金", {}).get("value")
+        images = props.get("画像", {}).get("value") or props.get("個別画像", {}).get("value") or []
+        image_count = len(images) if isinstance(images, list) else 0
+
+        self.preview_name.value = str(name)[:60]
+
+        if price is not None:
+            try:
+                self.preview_price.value = f"{int(float(price)):,}円"
+            except (ValueError, TypeError):
+                self.preview_price.value = str(price)
+        else:
+            self.preview_price.value = "---"
+
+        self.preview_images.value = f"{image_count}枚"
+        self.preview_card.visible = True
+        self.page.update()
+
     def on_start_listing(self, e):
-        """出品開始"""
+        """出品開始（未ログイン時は自動ログイン → 出品）"""
         notion_data = self.get_notion_data()
         if not notion_data:
             self._show_snackbar("先にNotionデータタブでデータを取得してください", ft.Colors.RED)
             return
 
-        if not self.login or not self.login.get_driver():
-            self._show_snackbar("先にYahooログインしてください", ft.Colors.RED)
-            return
+        self._update_preview(notion_data)
 
         if self._is_running:
             return
 
         self._is_running = True
         self.listing_btn.disabled = True
-        self._add_log("出品フォーム自動入力を開始...")
+        self.log_column.controls.clear()
         self.page.update()
 
         def on_progress(step: str, message: str):
-            """進捗コールバック"""
             success = not message.startswith("[エラー]") and not message.startswith("[要素未発見]")
             def update():
                 self._add_log(message, success=success)
             self.page.run_thread(update)
 
-        def do_listing():
+        def do_run():
             try:
+                # ログイン確認（高速: Yahooページ上なら遷移なし）
+                already_ok = (
+                    self.login is not None
+                    and self.login.get_driver() is not None
+                    and self.login.check_login_status()
+                )
+
+                if not already_ok:
+                    def upd_login():
+                        self._set_status("ログイン確認中...", ft.Colors.ORANGE)
+                        self._add_log("ログイン状態を確認中...")
+                        self.page.update()
+                    self.page.run_thread(upd_login)
+
+                    if not self.login:
+                        self.login = YahooLogin()
+                    if not self.login.get_driver():
+                        def upd_browser():
+                            self._add_log("ブラウザを起動中...")
+                            self.page.update()
+                        self.page.run_thread(upd_browser)
+                        self.login.init_driver()
+
+                    logged_in = self.login.ensure_login()
+                    if not logged_in:
+                        def on_login_fail():
+                            self._set_status("ログイン失敗", ft.Colors.RED)
+                            self._add_log("ログインに失敗しました", success=False)
+                            self.quit_btn.disabled = False
+                            self.page.update()
+                        self.page.run_thread(on_login_fail)
+                        return
+
+                    def on_login_ok():
+                        self._set_status("ログイン済み", ft.Colors.GREEN)
+                        self._add_log("ログイン成功")
+                        self.quit_btn.disabled = False
+                        self.page.update()
+                    self.page.run_thread(on_login_ok)
+                else:
+                    def upd_already():
+                        self._set_status("ログイン済み", ft.Colors.GREEN)
+                        self._add_log("ログイン確認済み")
+                        self.page.update()
+                    self.page.run_thread(upd_already)
+
+                # 出品フォーム入力
+                def upd_start():
+                    self._add_log("出品フォーム自動入力を開始...")
+                    self.page.update()
+                self.page.run_thread(upd_start)
+
                 self.listing = YahooAuctionListing(self.login.get_driver())
-                self.listing.fill_form(notion_data, on_progress=on_progress)
+                self.listing.fill_form(self.get_notion_data(), on_progress=on_progress)
 
                 def on_done():
                     self._add_log("自動入力完了 - フォームを確認して手動で出品してください")
                     self._set_status("入力完了", ft.Colors.GREEN)
                     self.page.update()
-
                 self.page.run_thread(on_done)
 
             except Exception as ex:
                 def on_error():
-                    self._add_log(f"出品エラー: {ex}", success=False)
+                    self._add_log(f"エラー: {ex}", success=False)
+                    self._set_status("エラー", ft.Colors.RED)
                     self.page.update()
-
                 self.page.run_thread(on_error)
 
             finally:
@@ -235,11 +325,9 @@ class YahooTab:
                     if self.listing:
                         self.listing.cleanup()
                     self.page.update()
-
                 self.page.run_thread(on_finish)
 
-        thread = threading.Thread(target=do_listing, daemon=True)
-        thread.start()
+        threading.Thread(target=do_run, daemon=True).start()
 
     def on_quit(self, e):
         """ブラウザ終了"""

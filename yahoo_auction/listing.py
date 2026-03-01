@@ -181,7 +181,7 @@ class YahooAuctionListing:
 
     def _fill_price(self, props: Dict[str, Any]):
         """価格を入力"""
-        price = self._get_prop_value(props, "仕入れ金")
+        price = self._get_prop_value(props, "売上金")
         if price is None:
             self._report("price", "[スキップ] 開始価格: データなし")
             return

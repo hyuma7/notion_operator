@@ -28,6 +28,7 @@ LISTING_DISPLAY_PROPERTIES = [
     "個別画像",
     # 金額（出品価格の参考）
     "仕入れ金",
+    "売上金",           # 販売価格（= 売上金）
 ]
 
 # 除外するプロパティ（計算系・利益系・配送料・内部管理系）
@@ -48,7 +49,6 @@ EXCLUDE_PROPERTIES = {
     "仕入れ日",
     "売却日",
     "在庫状況",
-    "売上金",
     "仕入れ先",
     "仕入れ先名",
     "仕入先カテゴリ",
@@ -73,7 +73,7 @@ PROPERTY_MAPPING = {
     "個別画像": "images",        # 個別画像（files）
     "カテゴリー": "category",     # カテゴリ（rollup）
     "ランク": "condition",        # 商品の状態（select: A,B,C...）
-    "仕入れ金": "start_price",   # 開始価格の参考値（number）
+    "売上金": "start_price",     # 出品価格（売上金）
     "サイズ": "size",            # 商品サイズ（rollup）
     "メーカー": "brand",         # ブランド/メーカー（rollup）
     "備考": "notes",             # 備考（rich_text）
@@ -94,7 +94,7 @@ CONDITION_MAPPING = {
 DEFAULTS = {
     "auction_duration_days": 7,        # オークション期間（日）
     "shipping_payer": "seller",        # 送料負担: "seller"=出品者, "buyer"=落札者
-    "shipping_region": "愛知県",       # 発送元の地域
+    "shipping_region": "神奈川県",      # 発送元の地域
     "shipping_method": "ゆうパック",    # 配送方法
     "returns_accepted": False,         # 返品可否
     "auto_extension": True,            # 自動延長

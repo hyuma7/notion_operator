@@ -114,6 +114,21 @@ class YahooLogin:
             print(f"Cookie読み込みエラー: {e}")
             return False
 
+    def check_login_status(self) -> bool:
+        """ログイン状態を高速確認（Yahooページ上なら遷移なし）"""
+        if not self.driver:
+            return False
+        try:
+            current_url = self.driver.current_url
+            if "yahoo.co.jp" in current_url:
+                return self._is_logged_in()
+            # 別ドメインにいる場合だけ遷移
+            self.driver.get(YAHOO_AUCTION_URL)
+            time.sleep(1)
+            return self._is_logged_in()
+        except Exception:
+            return False
+
     def get_driver(self) -> webdriver.Chrome:
         """現在のWebDriverインスタンスを返す"""
         return self.driver

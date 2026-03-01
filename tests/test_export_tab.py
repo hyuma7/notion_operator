@@ -8,7 +8,7 @@ import sys
 import os
 
 # プロジェクトのルートディレクトリをパスに追加
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'local_server'))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from brother_ql_proxy.ui.export_tab import ExportTab
 
