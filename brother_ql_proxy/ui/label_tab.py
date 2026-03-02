@@ -15,8 +15,6 @@ from brother_ql_proxy.utils import convert_to_brother_format
 # ラベルに出力するフィールド（順番通り）
 LABEL_FIELDS = ["商品名", "ID", "型番名", "年式", "売上金"]
 
-NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
-
 
 class LabelTab:
     def __init__(self, proxy, page: ft.Page):
@@ -67,6 +65,17 @@ class LabelTab:
             color=ft.Colors.GREY_600,
             italic=True,
         )
+        self.notion_link_btn = ft.TextButton(
+            "Notionで開く",
+            icon=ft.Icons.OPEN_IN_NEW,
+            on_click=self._on_open_notion,
+            visible=False,
+            style=ft.ButtonStyle(
+                color=ft.Colors.BLUE_400,
+                padding=ft.padding.all(0),
+            ),
+        )
+        self._current_notion_url = ""
         self.fields_column = ft.Column(controls=[], spacing=4)
 
         # ── 印刷ボタン ─────────────────────────────────────────────
@@ -141,7 +150,8 @@ class LabelTab:
                 ft.Divider(height=6),
 
                 # 選択商品フィールド
-                self.selected_label,
+                ft.Row([self.selected_label, self.notion_link_btn], spacing=8,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.fields_column,
                 ft.Divider(height=6),
 
@@ -176,24 +186,26 @@ class LabelTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_refresh(self, e):
-        if not NOTION_DATABASE_ID:
-            self._snack("NOTION_DATABASE_ID が未設定です", ft.Colors.RED)
+        db_id = self.proxy.config.get("notion_database_id", "")
+        if not db_id:
+            self._snack("Notion Database ID が未設定です（設定タブで設定してください）", ft.Colors.RED)
             return
         if self._is_loading:
             return
-        self._start_list_load(lambda: fetch_recent_items(NOTION_DATABASE_ID, limit=10))
+        self._start_list_load(lambda: fetch_recent_items(db_id, limit=10))
 
     def on_search(self, e):
         query = self.search_field.value.strip()
         if not query:
             self._snack("検索ワードを入力してください", ft.Colors.ORANGE)
             return
-        if not NOTION_DATABASE_ID:
-            self._snack("NOTION_DATABASE_ID が未設定です", ft.Colors.RED)
+        db_id = self.proxy.config.get("notion_database_id", "")
+        if not db_id:
+            self._snack("Notion Database ID が未設定です（設定タブで設定してください）", ft.Colors.RED)
             return
         if self._is_loading:
             return
-        self._start_list_load(lambda: search_items(NOTION_DATABASE_ID, query))
+        self._start_list_load(lambda: search_items(db_id, query))
 
     def _start_list_load(self, fetch_fn):
         self._is_loading = True
@@ -275,6 +287,8 @@ class LabelTab:
                     self.selected_label.italic = False
                     self.print_btn.disabled = False
                     self.preview_btn.disabled = False
+                    self._current_notion_url = data.get("url", "")
+                    self.notion_link_btn.visible = bool(self._current_notion_url)
                     self.page.update()
 
                 self.page.run_thread(on_ok)
@@ -464,6 +478,14 @@ class LabelTab:
                 self.page.run_thread(on_fin)
 
         threading.Thread(target=do, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────────────
+    # Notionリンクを開く
+    # ─────────────────────────────────────────────────────────────────
+
+    def _on_open_notion(self, e):
+        if self._current_notion_url:
+            self.page.launch_url(self._current_notion_url)
 
     # ─────────────────────────────────────────────────────────────────
     # ユーティリティ

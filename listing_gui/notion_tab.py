@@ -16,7 +16,7 @@ from pathlib import Path
 from notion.fetch_page import extract_page_id, fetch_all_properties, fetch_recent_items
 from yahoo_auction.config import LISTING_DISPLAY_PROPERTIES, EXCLUDE_PROPERTIES
 
-NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
+from notion.fetch_page import _get_database_id
 
 
 class NotionTab:
@@ -118,8 +118,8 @@ class NotionTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_refresh_list(self, e):
-        if not NOTION_DATABASE_ID:
-            self._show_snackbar("NOTION_DATABASE_ID が未設定です", ft.Colors.RED)
+        if not _get_database_id():
+            self._show_snackbar("_get_database_id() が未設定です", ft.Colors.RED)
             return
         if self._is_fetching:
             return
@@ -132,7 +132,7 @@ class NotionTab:
 
         def do_fetch():
             try:
-                items = fetch_recent_items(NOTION_DATABASE_ID, limit=10)
+                items = fetch_recent_items(_get_database_id(), limit=10)
 
                 def on_success():
                     self._render_item_list(items)

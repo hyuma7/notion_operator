@@ -19,7 +19,26 @@ from dotenv import load_dotenv
 from notion_client import Client
 
 load_dotenv()
-NOTION_API_KEY = os.getenv("NOTION_API_KEY")
+
+_CONFIG_FILE = "printer_proxy_config.json"
+
+
+def _get_api_key() -> str:
+    """設定ファイル → 環境変数の優先順位でAPIキーを返す"""
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("notion_api_key") or os.getenv("NOTION_API_KEY") or ""
+    except Exception:
+        return os.getenv("NOTION_API_KEY") or ""
+
+
+def _get_database_id() -> str:
+    """設定ファイル → 環境変数の優先順位でDatabase IDを返す"""
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("notion_database_id") or os.getenv("NOTION_DATABASE_ID") or ""
+    except Exception:
+        return os.getenv("NOTION_DATABASE_ID") or ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +326,7 @@ def fetch_recent_items(database_id: str, limit: int = 10) -> list[dict]:
     Returns:
         [{"page_id": str, "title": str, "last_edited_time": str, "url": str}, ...]
     """
-    notion = Client(auth=NOTION_API_KEY)
+    notion = Client(auth=_get_api_key())
     response = notion.databases.query(
         database_id=database_id,
         sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
@@ -344,7 +363,7 @@ def search_items(database_id: str, query: str, limit: int = 20) -> list[dict]:
     Returns:
         fetch_recent_items と同じ形式のリスト
     """
-    notion = Client(auth=NOTION_API_KEY)
+    notion = Client(auth=_get_api_key())
 
     # 数値だけなら unique_id（ID プロパティ）でも絞り込む
     filters = []
@@ -399,7 +418,7 @@ def fetch_all_properties(page_id: str) -> dict:
             }
         }
     """
-    notion = Client(auth=NOTION_API_KEY)
+    notion = Client(auth=_get_api_key())
     page = notion.pages.retrieve(page_id=page_id)
 
     props: dict[str, PropertyValue] = {}
@@ -423,8 +442,8 @@ def fetch_all_properties(page_id: str) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    if not NOTION_API_KEY:
-        print("エラー: NOTION_API_KEY が .env に設定されていません")
+    if not _get_api_key():
+        print("エラー: NOTION_API_KEY が設定されていません（設定タブまたは .env）")
         sys.exit(1)
 
     url = sys.argv[1] if len(sys.argv) > 1 else \

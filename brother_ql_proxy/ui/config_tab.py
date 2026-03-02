@@ -23,12 +23,6 @@ class ConfigTab:
             width=300
         )
         
-        self.proxy_port_field = ft.TextField(
-            label="プロキシポート",
-            value=str(proxy.config['proxy_port']),
-            width=300
-        )
-        
         self.label_size_dropdown = ft.Dropdown(
             label="ラベルサイズ",
             width=300,
@@ -39,14 +33,6 @@ class ConfigTab:
             value=proxy.config.get('label_size', '62x29')
         )
         
-        self.secret_key_field = ft.TextField(
-            label="外部アクセス用シークレットキー",
-            value=proxy.config.get('secret_key', ''),
-            password=True,
-            width=300,
-            helper_text="外部からのアクセス時に'secret'ヘッダーで必要です"
-        )
-
         # Notion設定
         self.notion_api_key_field = ft.TextField(
             label="Notion API Key",
@@ -72,9 +58,7 @@ class ConfigTab:
         try:
             self.proxy.config['printer_ip'] = self.printer_ip_field.value
             self.proxy.config['printer_port'] = int(self.printer_port_field.value)
-            self.proxy.config['proxy_port'] = int(self.proxy_port_field.value)
             self.proxy.config['label_size'] = self.label_size_dropdown.value
-            self.proxy.config['secret_key'] = self.secret_key_field.value
             self.proxy.config['notion_api_key'] = self.notion_api_key_field.value
             self.proxy.config['notion_database_id'] = self.notion_database_id_field.value
 
@@ -112,17 +96,6 @@ class ConfigTab:
                                 self.printer_ip_field,
                                 self.printer_port_field,
                                 self.label_size_dropdown
-                            ])
-                        )
-                    ),
-                    ft.Card(
-                        content=ft.Container(
-                            padding=ft.padding.all(20),
-                            content=ft.Column([
-                                ft.Text("プロキシ設定", size=18, weight=ft.FontWeight.BOLD),
-                                ft.Divider(),
-                                self.proxy_port_field,
-                                self.secret_key_field,
                             ])
                         )
                     ),

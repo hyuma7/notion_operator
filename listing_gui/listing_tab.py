@@ -1,7 +1,7 @@
 """
 出品タブ（統合版）
-- 左ペイン: 商品選択（Notionリスト + URL入力）
-- 右ペイン: 商品詳細プロパティ表示
+- 左ペイン: 商品選択（Notionリスト + 商品名/ID検索）
+- 右ペイン: 商品詳細プロパティ表示 + Notionリンク
 - 下部: 出品先選択 + 実行（ログイン・出品を1ボタンに統合）
 """
 
@@ -14,18 +14,19 @@ import requests
 
 from pathlib import Path
 
-from notion.fetch_page import extract_page_id, fetch_all_properties, fetch_recent_items
+from notion.fetch_page import extract_page_id, fetch_all_properties, fetch_recent_items, search_items
 from yahoo_auction.config import LISTING_DISPLAY_PROPERTIES, EXCLUDE_PROPERTIES
 from yahoo_auction.login import YahooLogin
 from yahoo_auction.listing import YahooAuctionListing
 
-NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID", "")
+from notion.fetch_page import _get_database_id
 
 
 class ListingTab:
     def __init__(self, page: ft.Page):
         self.page = page
         self.notion_data = None
+        self._current_notion_url = ""
         self._is_fetching = False
         self._is_running = False
         self.login = None
@@ -45,7 +46,7 @@ class ListingTab:
         )
 
         self.refresh_btn = ft.ElevatedButton(
-            "最新10件",
+            "直近10件",
             icon=ft.Icons.REFRESH,
             on_click=self.on_refresh_list,
             bgcolor=ft.Colors.BLUE_GREY_700,
@@ -54,19 +55,17 @@ class ListingTab:
         )
         self.list_status = ft.Text("", size=11, color=ft.Colors.GREY_600)
 
-        self.url_field = ft.TextField(
-            label="Notion URL（手動）",
-            hint_text="https://www.notion.so/...",
+        self.search_field = ft.TextField(
+            label="商品名 / ID で検索",
+            hint_text="例: テスト商品  または  123",
             expand=True,
             dense=True,
+            on_submit=self.on_search,
         )
-        self.url_fetch_btn = ft.ElevatedButton(
-            "取得",
-            icon=ft.Icons.DOWNLOAD,
-            on_click=self.on_fetch_by_url,
-            bgcolor=ft.Colors.BLUE,
-            color=ft.Colors.WHITE,
-            height=36,
+        self.search_btn = ft.IconButton(
+            icon=ft.Icons.SEARCH,
+            tooltip="検索",
+            on_click=self.on_search,
         )
 
         left_pane = ft.Container(
@@ -85,7 +84,7 @@ class ListingTab:
                     height=240,
                 ),
                 ft.Divider(height=8),
-                ft.Row([self.url_field, self.url_fetch_btn], spacing=6),
+                ft.Row([self.search_field, self.search_btn], spacing=4),
             ], spacing=8),
             padding=ft.padding.only(right=12),
         )
@@ -95,6 +94,16 @@ class ListingTab:
             "商品を選択してください",
             size=13,
             color=ft.Colors.GREY_500,
+        )
+        self.notion_link_btn = ft.TextButton(
+            "Notionで開く",
+            icon=ft.Icons.OPEN_IN_NEW,
+            on_click=self._on_open_notion,
+            visible=False,
+            style=ft.ButtonStyle(
+                color=ft.Colors.BLUE_400,
+                padding=ft.padding.all(0),
+            ),
         )
         self.props_column = ft.Column(
             controls=[],
@@ -113,7 +122,10 @@ class ListingTab:
         right_pane = ft.Container(
             expand=True,
             content=ft.Column([
-                self.detail_status,
+                ft.Row([
+                    self.detail_status,
+                    self.notion_link_btn,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Divider(height=4),
                 self.props_column,
                 self.copy_all_btn,
@@ -187,11 +199,14 @@ class ListingTab:
                         ft.Text("出品先:", size=13, color=ft.Colors.GREY_700),
                         self.yahoo_btn,
                         self.mercari_btn,
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                    ft.Row([
+                        self.start_btn,
+                        self.quit_btn,
                         ft.Container(expand=True),
                         ft.Text("ステータス:", size=13),
                         self.exec_status,
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
-                    ft.Row([self.start_btn, self.quit_btn], spacing=10),
                     ft.Divider(height=6),
                     ft.Container(
                         content=self.log_column,
@@ -215,12 +230,28 @@ class ListingTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_refresh_list(self, e):
-        if not NOTION_DATABASE_ID:
-            self._show_snackbar("NOTION_DATABASE_ID が未設定です", ft.Colors.RED)
+        db_id = _get_database_id()
+        if not db_id:
+            self._show_snackbar("Database IDが未設定です", ft.Colors.RED)
             return
         if self._is_fetching:
             return
+        self._start_list_load(lambda: fetch_recent_items(db_id, limit=10))
 
+    def on_search(self, e):
+        query = self.search_field.value.strip()
+        if not query:
+            self._show_snackbar("検索ワードを入力してください", ft.Colors.ORANGE)
+            return
+        db_id = _get_database_id()
+        if not db_id:
+            self._show_snackbar("Database IDが未設定です", ft.Colors.RED)
+            return
+        if self._is_fetching:
+            return
+        self._start_list_load(lambda: search_items(db_id, query))
+
+    def _start_list_load(self, fetch_fn):
         self._is_fetching = True
         self.refresh_btn.disabled = True
         self.list_status.value = "取得中..."
@@ -229,7 +260,7 @@ class ListingTab:
 
         def do_fetch():
             try:
-                items = fetch_recent_items(NOTION_DATABASE_ID, limit=10)
+                items = fetch_fn()
 
                 def on_success():
                     self._render_item_list(items)
@@ -279,25 +310,11 @@ class ListingTab:
             return
         self._start_fetch(lambda: fetch_all_properties(page_id))
 
-    def on_fetch_by_url(self, e):
-        url = self.url_field.value.strip()
-        if not url:
-            self._show_snackbar("URLを入力してください", ft.Colors.RED)
-            return
-        if self._is_fetching:
-            return
-        try:
-            page_id = extract_page_id(url)
-        except ValueError as ex:
-            self._show_snackbar(str(ex), ft.Colors.RED)
-            return
-        self._start_fetch(lambda: fetch_all_properties(page_id))
-
     def _start_fetch(self, fetch_fn):
         self._is_fetching = True
-        self.url_fetch_btn.disabled = True
         self.detail_status.value = "取得中..."
         self.detail_status.color = ft.Colors.BLUE
+        self.notion_link_btn.visible = False
         self.props_column.controls.clear()
         self.copy_all_btn.visible = False
         self.page.update()
@@ -313,6 +330,8 @@ class ListingTab:
                     self.detail_status.value = f"選択中: {title}"
                     self.detail_status.color = ft.Colors.GREEN_700
                     self.copy_all_btn.visible = True
+                    self._current_notion_url = data.get("url", "")
+                    self.notion_link_btn.visible = bool(self._current_notion_url)
                     self.page.update()
 
                 self.page.run_thread(on_success)
@@ -325,11 +344,18 @@ class ListingTab:
             finally:
                 def on_finish():
                     self._is_fetching = False
-                    self.url_fetch_btn.disabled = False
                     self.page.update()
                 self.page.run_thread(on_finish)
 
         threading.Thread(target=do_fetch, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────────────
+    # Notionリンクを開く
+    # ─────────────────────────────────────────────────────────────────
+
+    def _on_open_notion(self, e):
+        if self._current_notion_url:
+            self.page.launch_url(self._current_notion_url)
 
     # ─────────────────────────────────────────────────────────────────
     # プロパティ表示

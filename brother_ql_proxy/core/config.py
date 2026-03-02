@@ -10,11 +10,9 @@ LOG_FILE = "printer_proxy.log"
 DEFAULT_CONFIG = {
     "printer_ip": "192.168.1.100",
     "printer_port": 9100,
-    "proxy_port": 8080,
     "label_size": "62",
     "font_size": 16,
     "qr_size_scale": 3,
-    "secret_key": "",
     "notion_api_key": "",
     "notion_database_id": "1d254e6206d881bb9e88d2e7ffb90444"
 }
