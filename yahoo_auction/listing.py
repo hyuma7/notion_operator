@@ -54,7 +54,6 @@ class YahooAuctionListing:
         self._fill_title(props)
         self._fill_condition(props)
         self._fill_description(props)
-        self._fill_images(props)
         self._fill_price(props)
         self._fill_shipping(props)
 
@@ -65,11 +64,21 @@ class YahooAuctionListing:
         print("出品ボタンは手動で押してください")
         print("=" * 60)
 
+    def _dismiss_modal(self):
+        """PayPayMaturiModalなどオーバーレイモーダルをJSで非表示化"""
+        try:
+            self.driver.execute_script(
+                "document.querySelectorAll('[class*=\"Modal__filter\"], [class*=\"modal-overlay\"]')"
+                ".forEach(function(el){ el.style.display='none'; });"
+            )
+        except Exception:
+            pass
+
     def _select_sales_mode(self):
         """フリマ（定額）モードに切り替え"""
         try:
             buynow = self.driver.find_element(By.ID, "salesmode_buynow")
-            buynow.click()
+            self._js_click(buynow)
             self._report("sales_mode", "販売形式: フリマ（定額）")
             time.sleep(WAIT_MEDIUM)
         except Exception as e:
@@ -137,6 +146,9 @@ class YahooAuctionListing:
             return
 
         try:
+            # モーダルが被っている場合に閉じてからiframeを操作
+            self._dismiss_modal()
+
             # iframe内のリッチテキストエディタに入力
             iframe = self.driver.find_element(By.ID, "rteEditorComposition0")
             self.driver.switch_to.frame(iframe)

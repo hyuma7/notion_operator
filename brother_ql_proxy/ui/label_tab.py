@@ -80,6 +80,42 @@ class LabelTab:
         )
         self.print_status = ft.Text("", size=13)
 
+        # ── フォントサイズ設定 ─────────────────────────────────────
+        _font_size = self.proxy.config.get('font_size', 16)
+        self.font_size_value = ft.Text(str(_font_size), size=14, weight=ft.FontWeight.BOLD, width=30)
+        self.font_size_slider = ft.Slider(
+            min=8, max=36, divisions=14, value=_font_size,
+            label="{value}",
+            on_change=self._on_font_size_change,
+            expand=True,
+        )
+
+        # ── QRサイズ設定 ───────────────────────────────────────────
+        _qr_size = self.proxy.config.get('qr_size_scale', 3)
+        self.qr_size_value = ft.Text(str(_qr_size), size=14, weight=ft.FontWeight.BOLD, width=20)
+        self.qr_size_slider = ft.Slider(
+            min=1, max=6, divisions=5, value=_qr_size,
+            label="{value}",
+            on_change=self._on_qr_size_change,
+            expand=True,
+        )
+
+        # ── プレビュー ─────────────────────────────────────────────
+        self.preview_btn = ft.ElevatedButton(
+            "プレビュー",
+            icon=ft.Icons.PREVIEW,
+            on_click=self.on_preview,
+            bgcolor=ft.Colors.INDIGO_400,
+            color=ft.Colors.WHITE,
+            disabled=True,
+        )
+        self.preview_status = ft.Text("", size=12)
+        self.preview_img = ft.Image(
+            visible=False,
+            fit=ft.ImageFit.CONTAIN,
+            width=600,
+        )
+
         # ── レイアウト ───────────────────────────────────────────────
         self.content = ft.Column(
             controls=[
@@ -109,9 +145,26 @@ class LabelTab:
                 self.fields_column,
                 ft.Divider(height=6),
 
-                # 印刷
-                ft.Row([self.print_btn, self.print_status],
+                # フォントサイズ設定
+                ft.Row([
+                    ft.Text("フォントサイズ:", size=13, width=110),
+                    self.font_size_slider,
+                    self.font_size_value,
+                    ft.Text("pt", size=13),
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                # QRサイズ設定
+                ft.Row([
+                    ft.Text("QRコードサイズ:", size=13, width=110),
+                    self.qr_size_slider,
+                    self.qr_size_value,
+                ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Divider(height=4),
+
+                # 印刷・プレビュー
+                ft.Row([self.print_btn, self.preview_btn, self.print_status],
                        spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.preview_status,
+                self.preview_img,
             ],
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -204,6 +257,9 @@ class LabelTab:
         self.selected_label.color = ft.Colors.BLUE
         self.fields_column.controls.clear()
         self.print_btn.disabled = True
+        self.preview_btn.disabled = True
+        self.preview_img.visible = False
+        self.preview_status.value = ""
         self.print_status.value = ""
         self.page.update()
 
@@ -218,6 +274,7 @@ class LabelTab:
                     self.selected_label.color = ft.Colors.GREEN_800
                     self.selected_label.italic = False
                     self.print_btn.disabled = False
+                    self.preview_btn.disabled = False
                     self.page.update()
 
                 self.page.run_thread(on_ok)
@@ -297,8 +354,8 @@ class LabelTab:
                     label_size=label_size,
                     include_qr=True,
                     qr_data=page_url or "no-url",
-                    font_size=16,
-                    qr_size_scale=3,
+                    font_size=int(self.font_size_slider.value),
+                    qr_size_scale=int(self.qr_size_slider.value),
                 )
                 raster = convert_to_brother_format(img, label_size)
                 success = self.proxy.send_raw_data_to_printer(raster)
@@ -322,6 +379,87 @@ class LabelTab:
             finally:
                 def on_fin():
                     self.print_btn.disabled = False
+                    self.page.update()
+                self.page.run_thread(on_fin)
+
+        threading.Thread(target=do, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────────────
+    # フォントサイズ・プレビュー
+    # ─────────────────────────────────────────────────────────────────
+
+    def _on_font_size_change(self, e):
+        v = int(e.control.value)
+        self.font_size_value.value = str(v)
+        self.proxy.config['font_size'] = v
+        self.proxy.save_config()
+        self.page.update()
+
+    def _on_qr_size_change(self, e):
+        v = int(e.control.value)
+        self.qr_size_value.value = str(v)
+        self.proxy.config['qr_size_scale'] = v
+        self.proxy.save_config()
+        self.page.update()
+
+    def on_preview(self, e):
+        if not self._page_data:
+            return
+        self.preview_btn.disabled = True
+        self.preview_status.value = "プレビュー生成中..."
+        self.preview_status.color = ft.Colors.BLUE
+        self.preview_img.visible = False
+        self.page.update()
+
+        def do():
+            try:
+                props = self._page_data.get("properties", {})
+                printable_fields = []
+                for name in LABEL_FIELDS:
+                    info = props.get(name)
+                    value = info.get("value") if info else None
+                    if value is not None and value != "" and value != [] and value != {}:
+                        printable_fields.append({
+                            "name": name,
+                            "value": self._fmt(value),
+                            "type": info.get("type", ""),
+                        })
+
+                page_url = self._page_data.get("url", "")
+                font_size = int(self.font_size_slider.value)
+                label_size = self.proxy.config.get("label_size", "62")
+                gen = LabelPreviewGenerator()
+                result = gen.generate_preview(
+                    printable_fields,
+                    label_size=label_size,
+                    include_qr=True,
+                    qr_data=page_url or "no-url",
+                    font_size=font_size,
+                    qr_size_scale=int(self.qr_size_slider.value),
+                )
+
+                def on_ok():
+                    if result.get("success"):
+                        img_data = result["preview_image"].split(",")[1]
+                        self.preview_img.src_base64 = img_data
+                        self.preview_img.visible = True
+                        self.preview_status.value = "プレビュー完了"
+                        self.preview_status.color = ft.Colors.GREEN
+                    else:
+                        self.preview_status.value = f"エラー: {result.get('error')}"
+                        self.preview_status.color = ft.Colors.RED
+                    self.page.update()
+
+                self.page.run_thread(on_ok)
+            except Exception as ex:
+                def on_err():
+                    self.preview_status.value = f"エラー: {ex}"
+                    self.preview_status.color = ft.Colors.RED
+                    self.page.update()
+                self.page.run_thread(on_err)
+            finally:
+                def on_fin():
+                    self.preview_btn.disabled = False
                     self.page.update()
                 self.page.run_thread(on_fin)
 

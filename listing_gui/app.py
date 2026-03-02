@@ -1,7 +1,6 @@
 """
 出品ツール + プリンタープロキシ 統合アプリ
-タブ構成:
-  [Notionデータ] [ヤフオク出品] [設定] [Excel出力] [ラベル印刷]
+タブ構成: [ラベル印刷] [出品] [Excel出力] [設定]
 """
 
 import os
@@ -14,12 +13,11 @@ load_dotenv()
 
 import flet as ft
 
-from .notion_tab import create_notion_tab
-from .yahoo_tab import create_yahoo_tab
+from .listing_tab import create_listing_tab
 
 
-def _try_load_proxy_tabs(proxy, page):
-    """brother_ql_proxy のタブを読み込む。失敗時は空リストを返す"""
+def _try_load_proxy_tabs(proxy, page) -> dict:
+    """brother_ql_proxy のタブを読み込む。失敗時は空辞書を返す"""
     try:
         from brother_ql_proxy.ui import (
             create_config_tab, create_export_tab, create_label_tab,
@@ -27,10 +25,10 @@ def _try_load_proxy_tabs(proxy, page):
         config_tab, _ = create_config_tab(proxy, page)
         export_tab, _ = create_export_tab(proxy, page)
         label_tab, _ = create_label_tab(proxy, page)
-        return [config_tab, export_tab, label_tab]
+        return {"label": label_tab, "export": export_tab, "config": config_tab}
     except Exception as ex:
         print(f"[WARN] プリンタープロキシのロードに失敗しました: {ex}")
-        return []
+        return {}
 
 
 def main(page: ft.Page):
@@ -41,13 +39,10 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.LIGHT
     page.padding = 0
 
-    # ── 出品ツール タブ ──────────────────────────────────────────
-    notion_tab, notion_component = create_notion_tab(page)
-    yahoo_tab, _ = create_yahoo_tab(page, lambda: notion_component.notion_data)
+    listing_tab = create_listing_tab(page)
 
-    # ── プリンタープロキシ タブ ──────────────────────────────────
     proxy = None
-    proxy_tabs = []
+    proxy_tabs = {}
     try:
         from brother_ql_proxy.core import PrinterProxy
         proxy = PrinterProxy()
@@ -55,8 +50,15 @@ def main(page: ft.Page):
     except Exception as ex:
         print(f"[WARN] プリンタープロキシの初期化に失敗しました: {ex}")
 
-    # ── タブ統合 ─────────────────────────────────────────────────
-    all_tabs = [notion_tab, yahoo_tab] + proxy_tabs
+    # タブ順: ラベル印刷 > 出品 > Excel出力 > 設定
+    all_tabs = []
+    if "label" in proxy_tabs:
+        all_tabs.append(proxy_tabs["label"])
+    all_tabs.append(listing_tab)
+    if "export" in proxy_tabs:
+        all_tabs.append(proxy_tabs["export"])
+    if "config" in proxy_tabs:
+        all_tabs.append(proxy_tabs["config"])
 
     tabs = ft.Tabs(
         selected_index=0,
@@ -65,7 +67,6 @@ def main(page: ft.Page):
         expand=True,
     )
 
-    # ── AppBar ───────────────────────────────────────────────────
     page.appbar = ft.AppBar(
         title=ft.Text("出品ツール"),
         center_title=True,
