@@ -360,6 +360,13 @@ class LabelTab:
                         })
 
                 page_url = self._page_data.get("url", "")
+                page_id = self._page_data.get("page_id", "")
+                vercel_base_url = self.proxy.config.get("vercel_base_url", "").rstrip("/")
+                qr_data = (
+                    f"{vercel_base_url}/items/{page_id}"
+                    if vercel_base_url and page_id
+                    else page_url or "no-url"
+                )
 
                 gen = LabelPreviewGenerator()
                 label_size = self.proxy.config.get("label_size", "62")
@@ -367,7 +374,7 @@ class LabelTab:
                     printable_fields,
                     label_size=label_size,
                     include_qr=True,
-                    qr_data=page_url or "no-url",
+                    qr_data=qr_data,
                     font_size=int(self.font_size_slider.value),
                     qr_size_scale=int(self.qr_size_slider.value),
                 )
@@ -440,6 +447,13 @@ class LabelTab:
                         })
 
                 page_url = self._page_data.get("url", "")
+                page_id = self._page_data.get("page_id", "")
+                vercel_base_url = self.proxy.config.get("vercel_base_url", "").rstrip("/")
+                qr_data = (
+                    f"{vercel_base_url}/items/{page_id}"
+                    if vercel_base_url and page_id
+                    else page_url or "no-url"
+                )
                 font_size = int(self.font_size_slider.value)
                 label_size = self.proxy.config.get("label_size", "62")
                 gen = LabelPreviewGenerator()
@@ -447,7 +461,7 @@ class LabelTab:
                     printable_fields,
                     label_size=label_size,
                     include_qr=True,
-                    qr_data=page_url or "no-url",
+                    qr_data=qr_data,
                     font_size=font_size,
                     qr_size_scale=int(self.qr_size_slider.value),
                 )

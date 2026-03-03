@@ -47,6 +47,13 @@ class ConfigTab:
             width=300
         )
 
+        self.vercel_base_url_field = ft.TextField(
+            label="Vercel URL（商品管理Webアプリ）",
+            hint_text="例: https://your-app.vercel.app",
+            value=proxy.config.get('vercel_base_url', ''),
+            width=300
+        )
+
         self.save_btn = ft.ElevatedButton(
             "設定を保存",
             icon=ft.Icons.SAVE,
@@ -61,6 +68,7 @@ class ConfigTab:
             self.proxy.config['label_size'] = self.label_size_dropdown.value
             self.proxy.config['notion_api_key'] = self.notion_api_key_field.value
             self.proxy.config['notion_database_id'] = self.notion_database_id_field.value
+            self.proxy.config['vercel_base_url'] = self.vercel_base_url_field.value.rstrip('/')
 
             self.proxy.save_config()
             self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
@@ -106,7 +114,15 @@ class ConfigTab:
                                 ft.Text("Notion設定", size=18, weight=ft.FontWeight.BOLD),
                                 ft.Divider(),
                                 self.notion_api_key_field,
-                                self.notion_database_id_field
+                                self.notion_database_id_field,
+                                ft.Divider(height=4),
+                                ft.Text("Webアプリ設定", size=14, weight=ft.FontWeight.BOLD,
+                                        color=ft.Colors.BLUE_GREY_600),
+                                self.vercel_base_url_field,
+                                ft.Text(
+                                    "設定するとQRコードがVercel URLになります（未設定はNotionページURL）",
+                                    size=11, color=ft.Colors.GREY_500,
+                                ),
                             ])
                         )
                     ),
