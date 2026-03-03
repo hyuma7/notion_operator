@@ -142,8 +142,9 @@ class NotionTab:
                 self.page.run_thread(on_success)
 
             except Exception as ex:
+                err = ex
                 def on_error():
-                    self.list_status.value = f"エラー: {ex}"
+                    self.list_status.value = f"エラー: {err}"
                     self.page.update()
                 self.page.run_thread(on_error)
 
@@ -223,8 +224,9 @@ class NotionTab:
                 self.page.run_thread(on_success)
 
             except Exception as ex:
+                err = ex
                 def on_error():
-                    self.status_text.value = f"エラー: {ex}"
+                    self.status_text.value = f"エラー: {err}"
                     self.status_text.color = ft.Colors.RED
                     self.page.update()
                 self.page.run_thread(on_error)

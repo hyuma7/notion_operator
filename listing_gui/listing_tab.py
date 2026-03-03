@@ -269,8 +269,9 @@ class ListingTab:
 
                 self.page.run_thread(on_success)
             except Exception as ex:
+                err = ex
                 def on_error():
-                    self.list_status.value = f"エラー: {ex}"
+                    self.list_status.value = f"エラー: {err}"
                     self.page.update()
                 self.page.run_thread(on_error)
             finally:
@@ -336,8 +337,9 @@ class ListingTab:
 
                 self.page.run_thread(on_success)
             except Exception as ex:
+                err = ex
                 def on_error():
-                    self.detail_status.value = f"エラー: {ex}"
+                    self.detail_status.value = f"エラー: {err}"
                     self.detail_status.color = ft.Colors.RED
                     self.page.update()
                 self.page.run_thread(on_error)
@@ -603,8 +605,9 @@ class ListingTab:
                 self.page.run_thread(on_done)
 
             except Exception as ex:
+                err = ex
                 def on_error():
-                    self._add_log(f"エラー: {ex}", success=False)
+                    self._add_log(f"エラー: {err}", success=False)
                     self._set_exec_status("エラー", ft.Colors.RED)
                     self.page.update()
                 self.page.run_thread(on_error)

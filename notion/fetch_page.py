@@ -23,6 +23,9 @@ load_dotenv()
 _CONFIG_FILE = "printer_proxy_config.json"
 
 
+_NOTION_VERSION = "2022-06-28"
+
+
 def _get_api_key() -> str:
     """設定ファイル → 環境変数の優先順位でAPIキーを返す"""
     try:
@@ -326,11 +329,14 @@ def fetch_recent_items(database_id: str, limit: int = 10) -> list[dict]:
     Returns:
         [{"page_id": str, "title": str, "last_edited_time": str, "url": str}, ...]
     """
-    notion = Client(auth=_get_api_key())
-    response = notion.databases.query(
-        database_id=database_id,
-        sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
-        page_size=limit,
+    notion = Client(auth=_get_api_key(), notion_version=_NOTION_VERSION)
+    response = notion.request(
+        path=f"databases/{database_id}/query",
+        method="POST",
+        body={
+            "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+            "page_size": limit,
+        },
     )
 
     items = []
@@ -363,7 +369,7 @@ def search_items(database_id: str, query: str, limit: int = 20) -> list[dict]:
     Returns:
         fetch_recent_items と同じ形式のリスト
     """
-    notion = Client(auth=_get_api_key())
+    notion = Client(auth=_get_api_key(), notion_version=_NOTION_VERSION)
 
     # 数値だけなら unique_id（ID プロパティ）でも絞り込む
     filters = []
@@ -373,11 +379,14 @@ def search_items(database_id: str, query: str, limit: int = 20) -> list[dict]:
 
     filter_body = {"or": filters} if len(filters) > 1 else filters[0]
 
-    response = notion.databases.query(
-        database_id=database_id,
-        filter=filter_body,
-        sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
-        page_size=limit,
+    response = notion.request(
+        path=f"databases/{database_id}/query",
+        method="POST",
+        body={
+            "filter": filter_body,
+            "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}],
+            "page_size": limit,
+        },
     )
 
     items = []
@@ -418,7 +427,7 @@ def fetch_all_properties(page_id: str) -> dict:
             }
         }
     """
-    notion = Client(auth=_get_api_key())
+    notion = Client(auth=_get_api_key(), notion_version=_NOTION_VERSION)
     page = notion.pages.retrieve(page_id=page_id)
 
     props: dict[str, PropertyValue] = {}

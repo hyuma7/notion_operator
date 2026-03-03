@@ -25,7 +25,7 @@ class ExportService:
         self.api_key = api_key
         self.database_id = database_id
         if api_key:
-            self.notion = Client(auth=api_key)
+            self.notion = Client(auth=api_key, notion_version="2022-06-28")
         else:
             self.notion = None
 
@@ -79,7 +79,13 @@ class ExportService:
             self._check_cancelled()
 
             try:
-                result = self.notion.databases.query(**query_params)
+                params = dict(query_params)
+                database_id = params.pop("database_id")
+                result = self.notion.request(
+                    path=f"databases/{database_id}/query",
+                    method="POST",
+                    body=params,
+                )
                 # 成功したらリクエスト間の待機
                 time.sleep(self.REQUEST_DELAY)
                 return result

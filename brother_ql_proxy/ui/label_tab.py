@@ -225,8 +225,9 @@ class LabelTab:
 
                 self.page.run_thread(on_ok)
             except Exception as ex:
+                err = ex
                 def on_err():
-                    self.list_status.value = f"エラー: {ex}"
+                    self.list_status.value = f"エラー: {err}"
                     self.page.update()
                 self.page.run_thread(on_err)
             finally:
@@ -293,8 +294,9 @@ class LabelTab:
 
                 self.page.run_thread(on_ok)
             except Exception as ex:
+                err = ex
                 def on_err():
-                    self.selected_label.value = f"エラー: {ex}"
+                    self.selected_label.value = f"エラー: {err}"
                     self.selected_label.color = ft.Colors.RED
                     self.page.update()
                 self.page.run_thread(on_err)
@@ -392,8 +394,9 @@ class LabelTab:
 
                 self.page.run_thread(on_ok)
             except Exception as ex:
+                err = ex
                 def on_err():
-                    self.print_status.value = f"エラー: {ex}"
+                    self.print_status.value = f"エラー: {err}"
                     self.print_status.color = ft.Colors.RED
                     self.page.update()
                 self.page.run_thread(on_err)
@@ -480,8 +483,9 @@ class LabelTab:
 
                 self.page.run_thread(on_ok)
             except Exception as ex:
+                err = ex
                 def on_err():
-                    self.preview_status.value = f"エラー: {ex}"
+                    self.preview_status.value = f"エラー: {err}"
                     self.preview_status.color = ft.Colors.RED
                     self.page.update()
                 self.page.run_thread(on_err)

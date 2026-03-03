@@ -294,9 +294,10 @@ class ExportTab:
                 self.page.run_thread(on_cancelled)
 
             except Exception as ex:
+                err = ex
                 traceback.print_exc()
                 def on_error():
-                    self.pivot_result_text.value = f"❌ エラー: {str(ex)}"
+                    self.pivot_result_text.value = f"❌ エラー: {str(err)}"
                     self.export_pivot_btn.disabled = True
                 self.page.run_thread(on_error)
 
@@ -390,9 +391,10 @@ class ExportTab:
                 self.page.run_thread(on_cancelled)
 
             except Exception as ex:
+                err = ex
                 traceback.print_exc()
                 def on_error():
-                    self.daily_result_text.value = f"❌ エラー: {str(ex)}"
+                    self.daily_result_text.value = f"❌ エラー: {str(err)}"
                     self.export_daily_btn.disabled = True
                 self.page.run_thread(on_error)
 
