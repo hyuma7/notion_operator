@@ -22,6 +22,7 @@ class ExportTab:
         # Data cache
         self.pivot_data_cache = {}
         self.daily_sales_cache = []
+        self.daily_purchases_cache = []
 
         # UI Components
         self._build_ui()
@@ -372,12 +373,17 @@ class ExportTab:
                 e_plus = self.daily_end_date + timedelta(days=1)
                 e_str = e_plus.strftime("%Y-%m-%d")
 
-                sales = self.service.fetch_sales_data(s_str, e_str)
+                sales = self.service.fetch_daily_sales_data(s_str, e_str)
                 self.daily_sales_cache = sales
 
+                purchases = self.service.fetch_daily_purchase_data(s_str, e_str)
+                self.daily_purchases_cache = purchases
+
                 def on_success():
-                    if sales:
-                        self.daily_result_text.value = f"✅ {len(sales)}件の売上データを取得しました"
+                    if sales or purchases:
+                        self.daily_result_text.value = (
+                            f"✅ 売上 {len(sales)}件 / 仕入れ {len(purchases)}件 を取得しました"
+                        )
                         self.export_daily_btn.disabled = False
                     else:
                         self.daily_result_text.value = "⚠️ 該当期間のデータがありません"
@@ -412,13 +418,15 @@ class ExportTab:
         thread.start()
 
     def export_daily_excel(self, e):
-        if not self.daily_sales_cache:
+        if not self.daily_sales_cache and not self.daily_purchases_cache:
             return
 
         def save_file(e: ft.FilePickerResultEvent):
             if e.path:
                 try:
-                    self.service.generate_daily_excel(e.path, self.daily_sales_cache)
+                    self.service.generate_daily_excel(
+                        e.path, self.daily_sales_cache, self.daily_purchases_cache
+                    )
                     self.show_snackbar(f"保存しました: {e.path}", ft.Colors.GREEN)
                 except Exception as ex:
                     self.show_snackbar(f"保存エラー: {str(ex)}", ft.Colors.RED)

@@ -6,7 +6,7 @@ from notion_client.errors import APIResponseError
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from openpyxl import Workbook
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
-from .schemas import SoldRecord, PurchaseRecord
+from .schemas import SoldRecord, PurchaseRecord, DailySoldRecord, DailyPurchaseRecord
 
 
 class FetchCancelled(Exception):
@@ -269,6 +269,7 @@ class ExportService:
         row["Created time"] = page.get("created_time") # Map created_time to "Created time" for schema
 
         for prop_name, prop_value in properties.items():
+            prop_name = prop_name.strip()  # Notionプロパティ名の余分な空白を除去
             prop_type = prop_value["type"]
             
             if prop_type == "title":
@@ -822,44 +823,285 @@ class ExportService:
 
         wb.save(file_path)
 
-    def generate_daily_excel(self, file_path: str, sales: List[SoldRecord]):
-        """Simple daily sales export"""
-        if not sales:
-            return
+    def fetch_daily_sales_data(self, start_date: str, end_date: str) -> List[DailySoldRecord]:
+        """日別出力用: 売却日が期間内 かつ 在庫状況=売却済み のレコードを取得
 
-        # Basic logic: create pivots for total sales/profit by company, but only "Total" column
-        df = pd.DataFrame([s.model_dump() for s in sales])
-        
-        # ... (Simplified for brevity, similar to original but using the new structure if needed)
-        # Original code had pivot-like structure for daily too, but just one column "合計"
-        # I'll implement a basic version or copy the structure if strict adherence is needed.
-        # User asked for "file structure" mainly, I'll provide a working simple version.
-        
+        Args:
+            start_date: 開始日 (YYYY-MM-DD形式, inclusive)
+            end_date: 終了日の翌日 (YYYY-MM-DD形式, exclusive)
+
+        Returns:
+            DailySoldRecordのリスト（作成日時昇順）
+        """
+        if not self.notion or not self.database_id:
+            raise ValueError("API Key or Database ID not set")
+
+        self._check_cancelled()
+
+        all_results = []
+        has_more = True
+        start_cursor = None
+
+        self._report_progress(0, -1, "売上データを取得中...")
+
+        while has_more:
+            self._check_cancelled()
+
+            query_params = {
+                "database_id": self.database_id,
+                "filter": {
+                    "and": [
+                        {"property": "在庫状況", "status": {"equals": "売却済み"}},
+                        {"property": "売却日", "date": {"on_or_after": start_date}},
+                        {"property": "売却日", "date": {"before": end_date}},
+                    ]
+                },
+                "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+                "page_size": 100,
+            }
+            if start_cursor:
+                query_params["start_cursor"] = start_cursor
+
+            results = self._query_with_retry(query_params)
+            all_results.extend(results["results"])
+            has_more = results.get("has_more", False)
+            start_cursor = results.get("next_cursor")
+
+            self._report_progress(
+                len(all_results), -1,
+                f"売上データを取得中... ({len(all_results)}件取得済み)"
+            )
+
+        print(f"[DEBUG] fetch_daily_sales_data: API returned {len(all_results)} raw records")
+
+        records = []
+        for page in all_results:
+            flat_data = self._flatten_notion_page(page)
+            try:
+                record = DailySoldRecord(**flat_data)
+                records.append(record)
+            except Exception as e:
+                print(f"[DEBUG] Skipping daily sold record: {e}")
+                print(f"[DEBUG]   flat_data keys: {list(flat_data.keys())}")
+                continue
+
+        print(f"[DEBUG] fetch_daily_sales_data: parsed {len(records)} records")
+        return records
+
+    def fetch_daily_purchase_data(self, start_date: str, end_date: str) -> List[DailyPurchaseRecord]:
+        """日別出力用: 仕入れ日が期間内 の全ステータスレコードを取得
+
+        Args:
+            start_date: 開始日 (YYYY-MM-DD形式, inclusive)
+            end_date: 終了日の翌日 (YYYY-MM-DD形式, exclusive)
+
+        Returns:
+            DailyPurchaseRecordのリスト（作成日時昇順）
+        """
+        if not self.notion or not self.database_id:
+            raise ValueError("API Key or Database ID not set")
+
+        self._check_cancelled()
+
+        all_results = []
+        has_more = True
+        start_cursor = None
+
+        self._report_progress(0, -1, "仕入れデータを取得中...")
+
+        while has_more:
+            self._check_cancelled()
+
+            query_params = {
+                "database_id": self.database_id,
+                "filter": {
+                    "and": [
+                        {"property": "仕入れ日", "date": {"on_or_after": start_date}},
+                        {"property": "仕入れ日", "date": {"before": end_date}},
+                    ]
+                },
+                "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+                "page_size": 100,
+            }
+            if start_cursor:
+                query_params["start_cursor"] = start_cursor
+
+            results = self._query_with_retry(query_params)
+            all_results.extend(results["results"])
+            has_more = results.get("has_more", False)
+            start_cursor = results.get("next_cursor")
+
+            self._report_progress(
+                len(all_results), -1,
+                f"仕入れデータを取得中... ({len(all_results)}件取得済み)"
+            )
+
+        records = []
+        for page in all_results:
+            flat_data = self._flatten_notion_page(page)
+            try:
+                record = DailyPurchaseRecord(**flat_data)
+                records.append(record)
+            except Exception as e:
+                print(f"Skipping invalid daily purchase record: {e}")
+                continue
+
+        return records
+
+    def generate_daily_excel(
+        self,
+        file_path: str,
+        sales: List[DailySoldRecord],
+        purchases: List[DailyPurchaseRecord],
+    ):
+        """日別出力: 売上セクション + 仕入れセクションをシート別に出力"""
         wb = Workbook()
-        ws = wb.active
-        ws.title = "日別売上"
-        
-        # Just dump the raw list for now or simple summary? 
-        # The original did a pivot style summary. Functional equivalent:
-        
-        ws.append(["企業名", "売上", "利益"])
-        
-        sales_sum = {}
-        profit_sum = {}
-        
-        for index, row in df.iterrows():
-            sup = row['supplier']
-            chan = row['sales_channel']
-            
-            if sup and sup != '不明':
-                sales_sum[sup] = sales_sum.get(sup, 0) + row['sales_amount']
-                profit_sum[sup] = profit_sum.get(sup, 0) + row['profit']
-            
-            if chan and chan != '不明':
-                sales_sum[chan] = sales_sum.get(chan, 0) + row['sales_amount']
-                profit_sum[chan] = profit_sum.get(chan, 0) + row['profit']
 
-        for company in sorted(sales_sum.keys()):
-            ws.append([company, sales_sum[company], profit_sum[company]])
-            
+        header_fill = PatternFill(start_color="D3D3D3", end_color="D3D3D3", fill_type="solid")
+        total_fill = PatternFill(start_color="FFE4B5", end_color="FFE4B5", fill_type="solid")
+        bold_font = Font(bold=True)
+        center_align = Alignment(horizontal="center")
+
+        # ---- 売上シート ----
+        ws_sales = wb.active
+        ws_sales.title = "売上"
+
+        sales_columns = [
+            ("商品名",       lambda r: r.product_name),
+            ("型番",         lambda r: r.model_number),
+            ("製番",         lambda r: r.serial_number),
+            ("売却日",       lambda r: r.sold_date),
+            ("売上金",       lambda r: r.sales_amount),
+            ("仕入れ金",     lambda r: r.purchase_cost),
+            ("仕入れ手数料", lambda r: r.purchase_fee),
+            ("仕入れ原価",   lambda r: r.cost_price),
+            ("送料",         lambda r: r.shipping_cost),
+            ("送料計算方法", lambda r: r.shipping_method),
+            ("販売手数料",   lambda r: r.commission),
+            ("純利益",       lambda r: r.profit),
+            ("利益率",       lambda r: r.profit_rate),
+            ("仕入れ先",     lambda r: r.supplier),
+            ("仕入れ日",     lambda r: r.purchase_date),
+            ("販売媒体名",   lambda r: r.sales_channel),
+            ("作業担当",     lambda r: r.assignee),
+            ("伝票番号",     lambda r: r.slip_number),
+            ("発送伝票番号", lambda r: r.shipping_slip_number),
+            ("購入者名",     lambda r: r.buyer_name),
+        ]
+        numeric_sales_cols = {
+            "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
+            "送料", "販売手数料", "純利益", "発送伝票番号",
+        }
+
+        # ヘッダー行
+        for col_idx, (col_name, _) in enumerate(sales_columns, 1):
+            cell = ws_sales.cell(row=1, column=col_idx, value=col_name)
+            cell.fill = header_fill
+            cell.font = bold_font
+            cell.alignment = center_align
+
+        # データ行
+        for row_idx, record in enumerate(sales, 2):
+            for col_idx, (col_name, getter) in enumerate(sales_columns, 1):
+                value = getter(record)
+                cell = ws_sales.cell(row=row_idx, column=col_idx, value=value)
+                if col_name in numeric_sales_cols and value is not None:
+                    cell.number_format = "#,##0"
+
+        # 合計行
+        total_row = len(sales) + 2
+        numeric_totals = {
+            "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
+            "送料", "販売手数料", "純利益",
+        }
+        # 利益率の平均（None を除いた件数で割る）
+        profit_rates = [r.profit_rate for r in sales if r.profit_rate is not None]
+        avg_profit_rate = sum(profit_rates) / len(profit_rates) if profit_rates else None
+
+        for col_idx, (col_name, getter) in enumerate(sales_columns, 1):
+            if col_name in numeric_totals:
+                total = sum(getter(r) or 0 for r in sales)
+                cell = ws_sales.cell(row=total_row, column=col_idx, value=total)
+                cell.number_format = "#,##0"
+                cell.fill = total_fill
+                cell.font = bold_font
+            elif col_name == "利益率":
+                cell = ws_sales.cell(row=total_row, column=col_idx, value=avg_profit_rate)
+                cell.fill = total_fill
+                cell.font = bold_font
+            elif col_idx == 1:
+                cell = ws_sales.cell(row=total_row, column=col_idx, value="合計")
+                cell.fill = total_fill
+                cell.font = bold_font
+
+        # 列幅
+        ws_sales.column_dimensions["A"].width = 28
+        for col_idx, (col_name, _) in enumerate(sales_columns, 1):
+            if col_idx > 1:
+                col_letter = ws_sales.cell(row=1, column=col_idx).column_letter
+                ws_sales.column_dimensions[col_letter].width = 14
+
+        # ---- 仕入れシート ----
+        ws_purchase = wb.create_sheet(title="仕入れ")
+
+        purchase_columns = [
+            ("商品名",         lambda r: r.product_name),
+            ("型番",           lambda r: r.model_number),
+            ("製番",           lambda r: r.serial_number),
+            ("メーカー",       lambda r: r.maker),
+            ("カテゴリー",     lambda r: r.category),
+            ("サイズ",         lambda r: r.size),
+            ("年式",           lambda r: r.year),
+            ("ランク",         lambda r: r.rank),
+            ("仕入れ日",       lambda r: r.purchase_date),
+            ("仕入れ金",       lambda r: r.purchase_cost),
+            ("仕入れ手数料",   lambda r: r.purchase_fee),
+            ("仕入れ原価",     lambda r: r.cost_price),
+            ("仕入れ先",       lambda r: r.supplier),
+            ("仕入先カテゴリ", lambda r: r.supplier_category),
+            ("在庫状況",       lambda r: r.stock_status),
+            ("作業担当",       lambda r: r.assignee),
+            ("見込み売上",     lambda r: r.estimated_sales),
+        ]
+        numeric_purchase_cols = {
+            "仕入れ金", "仕入れ手数料", "仕入れ原価", "見込み売上",
+        }
+
+        # ヘッダー行
+        for col_idx, (col_name, _) in enumerate(purchase_columns, 1):
+            cell = ws_purchase.cell(row=1, column=col_idx, value=col_name)
+            cell.fill = header_fill
+            cell.font = bold_font
+            cell.alignment = center_align
+
+        # データ行
+        for row_idx, record in enumerate(purchases, 2):
+            for col_idx, (col_name, getter) in enumerate(purchase_columns, 1):
+                value = getter(record)
+                cell = ws_purchase.cell(row=row_idx, column=col_idx, value=value)
+                if col_name in numeric_purchase_cols and value is not None:
+                    cell.number_format = "#,##0"
+
+        # 合計行
+        total_row_p = len(purchases) + 2
+        numeric_purchase_totals = {"仕入れ金", "仕入れ手数料", "仕入れ原価", "見込み売上"}
+        for col_idx, (col_name, getter) in enumerate(purchase_columns, 1):
+            if col_name in numeric_purchase_totals:
+                total = sum(getter(r) or 0 for r in purchases)
+                cell = ws_purchase.cell(row=total_row_p, column=col_idx, value=total)
+                cell.number_format = "#,##0"
+                cell.fill = total_fill
+                cell.font = bold_font
+            elif col_idx == 1:
+                cell = ws_purchase.cell(row=total_row_p, column=col_idx, value="合計")
+                cell.fill = total_fill
+                cell.font = bold_font
+
+        # 列幅
+        ws_purchase.column_dimensions["A"].width = 28
+        for col_idx, (col_name, _) in enumerate(purchase_columns, 1):
+            if col_idx > 1:
+                col_letter = ws_purchase.cell(row=1, column=col_idx).column_letter
+                ws_purchase.column_dimensions[col_letter].width = 14
+
         wb.save(file_path)
