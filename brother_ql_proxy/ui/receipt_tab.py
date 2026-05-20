@@ -1,20 +1,20 @@
 """
 領収書タブ
-- Notionから直近10件取得 or 商品名/IDで検索
+- Notionから直近30件取得 or 商品名で検索
+- チェックボックスで複数選択
 - 選択した商品の領収書プレビューを表示
 - Excel形式で領収書を出力
 """
 
 import os
 import threading
-from datetime import date, datetime
+from datetime import date
 import flet as ft
 
 from notion.fetch_page import fetch_recent_items, search_items, fetch_all_properties
 
 
 def _fmt_currency(value) -> str:
-    """数値を ¥X,XXX 形式にフォーマット"""
     try:
         n = int(value)
         return f"¥{n:,}"
@@ -22,152 +22,123 @@ def _fmt_currency(value) -> str:
         return "¥0"
 
 
-def _generate_receipt_excel(path: str, item_name: str, amount: int, issue_date: str):
-    """openpyxl で領収書Excelを生成する"""
+def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date: str):
+    """複数商品の領収書Excelを生成する"""
     from openpyxl import Workbook
-    from openpyxl.styles import (
-        Font, Alignment, Border, Side, PatternFill, numbers
-    )
-    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
     wb = Workbook()
     ws = wb.active
     ws.title = "領収書"
 
-    # 列幅設定
     ws.column_dimensions["A"].width = 8
     ws.column_dimensions["B"].width = 30
     ws.column_dimensions["C"].width = 10
     ws.column_dimensions["D"].width = 15
     ws.column_dimensions["E"].width = 12
 
-    # 行高設定
     ws.row_dimensions[1].height = 40
     ws.row_dimensions[2].height = 20
-    ws.row_dimensions[4].height = 22
-    ws.row_dimensions[5].height = 22
-    ws.row_dimensions[8].height = 20
-    ws.row_dimensions[9].height = 20
-    ws.row_dimensions[10].height = 24
 
-    # ── スタイル定義 ─────────────────────────────────────────────
     thin = Side(style="thin")
     medium = Side(style="medium")
     thick = Side(style="thick")
+    header_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    data_border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    total_border = Border(left=thin, right=thin, top=thin, bottom=medium)
+    hanko_border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
-    header_border = Border(
-        left=thin, right=thin, top=thin, bottom=thin
-    )
-    data_border = Border(
-        left=thin, right=thin, top=thin, bottom=thin
-    )
-    total_border = Border(
-        left=thin, right=thin, top=thin, bottom=medium
-    )
-    hanko_border = Border(
-        left=thick, right=thick, top=thick, bottom=thick
-    )
-
-    # ── Row 1: 領収書タイトル ──────────────────────────────────────
+    # タイトル
     ws.merge_cells("A1:D1")
-    title_cell = ws["A1"]
-    title_cell.value = "領　収　書"
-    title_cell.font = Font(name="MS Gothic", size=24, bold=True)
-    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    c = ws["A1"]
+    c.value = "領　収　書"
+    c.font = Font(name="MS Gothic", size=24, bold=True)
+    c.alignment = Alignment(horizontal="center", vertical="center")
 
-    # ── Row 2: 発行日 ─────────────────────────────────────────────
+    # 発行日
     ws.merge_cells("A2:D2")
-    date_cell = ws["A2"]
-    date_cell.value = f"発行日: {issue_date}"
-    date_cell.font = Font(name="MS Gothic", size=11)
-    date_cell.alignment = Alignment(horizontal="right", vertical="center")
+    c = ws["A2"]
+    c.value = f"発行日: {issue_date}"
+    c.font = Font(name="MS Gothic", size=11)
+    c.alignment = Alignment(horizontal="right", vertical="center")
 
-    # ── Row 3: 空白 ───────────────────────────────────────────────
+    # ヘッダー行
+    header_row = 4
+    ws.row_dimensions[header_row].height = 22
+    for col, label in [(1, "No."), (2, "品名"), (3, "数量"), (4, "金額")]:
+        c = ws.cell(row=header_row, column=col)
+        c.value = label
+        c.font = Font(name="MS Gothic", size=11, bold=True)
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = header_border
+        c.fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
 
-    # ── Row 4: テーブルヘッダー ────────────────────────────────────
-    headers = [("A4", "No."), ("B4", "品名"), ("C4", "数量"), ("D4", "金額")]
-    for cell_ref, label in headers:
-        cell = ws[cell_ref]
-        cell.value = label
-        cell.font = Font(name="MS Gothic", size=11, bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-        cell.border = header_border
-        cell.fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
+    # 商品行
+    data_start = header_row + 1
+    for idx, (item_name, amount) in enumerate(items):
+        r = data_start + idx
+        ws.row_dimensions[r].height = 20
+        for col, val, fmt, align in [
+            (1, idx + 1, None, "center"),
+            (2, item_name, None, "left"),
+            (3, 1, None, "center"),
+            (4, amount, '"¥"#,##0', "right"),
+        ]:
+            c = ws.cell(row=r, column=col)
+            c.value = val
+            c.font = Font(name="MS Gothic", size=11)
+            c.alignment = Alignment(horizontal=align, vertical="center")
+            c.border = data_border
+            if fmt:
+                c.number_format = fmt
 
-    # ── Row 5: 商品データ ──────────────────────────────────────────
-    ws["A5"].value = 1
-    ws["A5"].alignment = Alignment(horizontal="center", vertical="center")
-    ws["A5"].border = data_border
-    ws["A5"].font = Font(name="MS Gothic", size=11)
-
-    ws["B5"].value = item_name
-    ws["B5"].alignment = Alignment(horizontal="left", vertical="center")
-    ws["B5"].border = data_border
-    ws["B5"].font = Font(name="MS Gothic", size=11)
-
-    ws["C5"].value = 1
-    ws["C5"].alignment = Alignment(horizontal="center", vertical="center")
-    ws["C5"].border = data_border
-    ws["C5"].font = Font(name="MS Gothic", size=11)
-
-    ws["D5"].value = amount
-    ws["D5"].alignment = Alignment(horizontal="right", vertical="center")
-    ws["D5"].border = data_border
-    ws["D5"].font = Font(name="MS Gothic", size=11)
-    ws["D5"].number_format = '"¥"#,##0'
-
-    # ── Row 6-7: 空白 ─────────────────────────────────────────────
-
-    # ── Row 8-10: 合計ブロック ─────────────────────────────────────
-    subtotal = amount
+    # 合計ブロック
+    subtotal = sum(a for _, a in items)
     tax = int(subtotal * 0.1)
     total = subtotal + tax
 
-    summary_rows = [
-        (8, "小計", subtotal, False),
-        (9, "消費税(10%)", tax, False),
-        (10, "合計", total, True),
-    ]
-    for row_num, label, value, is_bold in summary_rows:
-        label_cell = ws.cell(row=row_num, column=3)
-        label_cell.value = label
-        label_cell.font = Font(name="MS Gothic", size=11, bold=is_bold)
-        label_cell.alignment = Alignment(horizontal="right", vertical="center")
-        label_cell.border = total_border if is_bold else header_border
+    summary_start = data_start + len(items) + 2
+    for i, (label, value, bold) in enumerate([
+        ("小計", subtotal, False),
+        ("消費税(10%)", tax, False),
+        ("合計", total, True),
+    ]):
+        r = summary_start + i
+        ws.row_dimensions[r].height = 22
+        lc = ws.cell(row=r, column=3)
+        lc.value = label
+        lc.font = Font(name="MS Gothic", size=11, bold=bold)
+        lc.alignment = Alignment(horizontal="right", vertical="center")
+        lc.border = total_border if bold else header_border
 
-        value_cell = ws.cell(row=row_num, column=4)
-        value_cell.value = value
-        value_cell.font = Font(name="MS Gothic", size=12 if is_bold else 11, bold=is_bold)
-        value_cell.alignment = Alignment(horizontal="right", vertical="center")
-        value_cell.border = total_border if is_bold else header_border
-        value_cell.number_format = '"¥"#,##0'
+        vc = ws.cell(row=r, column=4)
+        vc.value = value
+        vc.font = Font(name="MS Gothic", size=12 if bold else 11, bold=bold)
+        vc.alignment = Alignment(horizontal="right", vertical="center")
+        vc.border = total_border if bold else header_border
+        vc.number_format = '"¥"#,##0'
 
-    # ── Row 11: 空白 ──────────────────────────────────────────────
+    # 署名・ハンコ
+    sign_start = summary_start + 5
+    for i, text in enumerate(["株式会社アーネスト", "代表取締役  斉藤 潤"]):
+        r = sign_start + i
+        ws.row_dimensions[r].height = 22
+        c = ws.cell(row=r, column=1)
+        c.value = text
+        c.font = Font(name="MS Gothic", size=11)
+        c.alignment = Alignment(horizontal="left", vertical="center")
 
-    # ── Row 12-14: 署名・ハンコ ────────────────────────────────────
-    ws.row_dimensions[12].height = 22
-    ws.row_dimensions[13].height = 22
-    ws.row_dimensions[14].height = 22
-
-    ws["A12"].value = "株式会社アーネスト"
-    ws["A12"].font = Font(name="MS Gothic", size=11)
-    ws["A12"].alignment = Alignment(horizontal="left", vertical="center")
-
-    ws["A13"].value = "代表取締役  斉藤 潤"
-    ws["A13"].font = Font(name="MS Gothic", size=11)
-    ws["A13"].alignment = Alignment(horizontal="left", vertical="center")
-
-    # ハンコセル (D12:E14) をマージして印鑑風に表示
-    ws.merge_cells("D12:E14")
-    hanko_cell = ws["D12"]
-    hanko_cell.value = "株式会社アーネスト\n代表取締役\n斉藤 潤"
-    hanko_cell.font = Font(name="MS Gothic", size=10, bold=True, color="8B0000")
-    hanko_cell.alignment = Alignment(
-        horizontal="center", vertical="center", wrap_text=True
-    )
-    hanko_cell.border = hanko_border
-    # 薄いピンク/赤みがかった背景（印鑑の朱色イメージ）
-    hanko_cell.fill = PatternFill(fill_type="solid", fgColor="FFE4E1")
+    hanko_r1 = sign_start
+    hanko_r2 = sign_start + 2
+    ws.merge_cells(f"D{hanko_r1}:E{hanko_r2}")
+    hc = ws.cell(row=hanko_r1, column=4)
+    hc.value = "株式会社アーネスト\n代表取締役\n斉藤 潤"
+    hc.font = Font(name="MS Gothic", size=10, bold=True, color="8B0000")
+    hc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    hc.border = hanko_border
+    hc.fill = PatternFill(fill_type="solid", fgColor="FFE4E1")
+    for r in range(hanko_r1, hanko_r2 + 1):
+        ws.row_dimensions[r].height = 22
 
     wb.save(path)
 
@@ -176,8 +147,10 @@ class ReceiptTab:
     def __init__(self, proxy, page: ft.Page):
         self.proxy = proxy
         self.page = page
-        self._page_data = None
         self._is_loading = False
+        self._selected_items: dict[str, str] = {}   # page_id → title
+        self._item_data_cache: dict[str, dict] = {}  # page_id → properties data
+        self._current_list: list[dict] = []
         self._build_ui()
 
     # ─────────────────────────────────────────────────────────────────
@@ -185,14 +158,13 @@ class ReceiptTab:
     # ─────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── 一覧エリア ─────────────────────────────────────────────
         self.list_column = ft.Column(
             controls=[],
             scroll=ft.ScrollMode.AUTO,
             spacing=2,
         )
         self.refresh_btn = ft.ElevatedButton(
-            "直近10件",
+            "直近30件",
             icon=ft.Icons.REFRESH,
             on_click=self.on_refresh,
             bgcolor=ft.Colors.BLUE_GREY_700,
@@ -200,10 +172,9 @@ class ReceiptTab:
         )
         self.list_status = ft.Text("", size=12, color=ft.Colors.GREY_600)
 
-        # ── 検索エリア ─────────────────────────────────────────────
         self.search_field = ft.TextField(
-            label="商品名 / ID で検索",
-            hint_text="例: テスト商品  または  123",
+            label="商品名で検索",
+            hint_text="例: MacBook",
             expand=True,
             dense=True,
             on_submit=self.on_search,
@@ -214,18 +185,26 @@ class ReceiptTab:
             on_click=self.on_search,
         )
 
-        # ── 選択商品 ───────────────────────────────────────────────
-        self.selected_label = ft.Text(
-            "商品が選択されていません",
+        self.selection_label = ft.Text(
+            "0件選択中",
             size=13,
             color=ft.Colors.GREY_600,
-            italic=True,
+        )
+        self.clear_btn = ft.TextButton(
+            "選択解除",
+            on_click=self._clear_selection,
         )
 
-        # ── 領収書プレビュー ───────────────────────────────────────
         self.preview_column = ft.Column(controls=[], spacing=4, visible=False)
 
-        # ── Excel出力ボタン ────────────────────────────────────────
+        self.preview_btn = ft.ElevatedButton(
+            "プレビュー",
+            icon=ft.Icons.PREVIEW,
+            on_click=self.on_preview,
+            bgcolor=ft.Colors.BLUE_700,
+            color=ft.Colors.WHITE,
+            disabled=True,
+        )
         self.export_btn = ft.ElevatedButton(
             "Excel出力",
             icon=ft.Icons.TABLE_VIEW,
@@ -236,13 +215,11 @@ class ReceiptTab:
         )
         self.export_status = ft.Text("", size=13)
 
-        # ── レイアウト ───────────────────────────────────────────────
         self.content = ft.Column(
             controls=[
                 ft.Text("領収書", size=18, weight=ft.FontWeight.BOLD),
                 ft.Divider(height=6),
 
-                # 一覧
                 ft.Row([
                     ft.Text("最近の更新", size=14, weight=ft.FontWeight.BOLD),
                     self.refresh_btn,
@@ -253,23 +230,25 @@ class ReceiptTab:
                     border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
                     border_radius=6,
                     padding=ft.padding.all(6),
-                    height=200,
+                    height=300,
                 ),
 
-                # 検索
                 ft.Row([self.search_field, self.search_btn], spacing=4),
                 ft.Divider(height=6),
 
-                # 選択商品
-                self.selected_label,
+                ft.Row([
+                    self.selection_label,
+                    self.clear_btn,
+                ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ft.Divider(height=6),
 
-                # 領収書プレビュー
                 self.preview_column,
 
-                # Excel出力
-                ft.Row([self.export_btn, self.export_status],
-                       spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row(
+                    [self.preview_btn, self.export_btn, self.export_status],
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
             ],
             scroll=ft.ScrollMode.AUTO,
             expand=True,
@@ -287,7 +266,7 @@ class ReceiptTab:
             return
         if self._is_loading:
             return
-        self._start_list_load(lambda: fetch_recent_items(db_id, limit=10))
+        self._start_list_load(lambda: fetch_recent_items(db_id, limit=30))
 
     def on_search(self, e):
         query = self.search_field.value.strip()
@@ -314,6 +293,7 @@ class ReceiptTab:
                 items = fetch_fn()
 
                 def on_ok():
+                    self._current_list = items
                     self._render_list(items)
                     self.list_status.value = f"{len(items)}件"
                     self.page.update()
@@ -340,50 +320,100 @@ class ReceiptTab:
     def _render_list(self, items: list[dict]):
         self.list_column.controls.clear()
         for item in items:
-            dt = item["last_edited_time"][:16].replace("T", " ") if item["last_edited_time"] else ""
+            pid = item["page_id"]
+            title = item["title"]
+            dt = item["last_edited_time"][:16].replace("T", " ") if item.get("last_edited_time") else ""
+            is_checked = pid in self._selected_items
+
+            cb = ft.Checkbox(
+                value=is_checked,
+                on_change=lambda e, p=pid, t=title: self._on_check(e, p, t),
+            )
             row = ft.Container(
                 content=ft.Row([
+                    cb,
                     ft.Text(dt, size=11, color=ft.Colors.GREY_600, width=115, no_wrap=True),
-                    ft.TextButton(
-                        item["title"],
-                        on_click=lambda e, pid=item["page_id"], t=item["title"]: self._select(pid, t),
-                        style=ft.ButtonStyle(padding=ft.padding.all(0)),
-                    ),
+                    ft.Text(title, size=12, expand=True, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
                 ], spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.padding.symmetric(horizontal=4, vertical=2),
                 border_radius=4,
-                ink=True,
+                bgcolor=ft.Colors.GREEN_50 if is_checked else None,
             )
             self.list_column.controls.append(row)
 
-    # ─────────────────────────────────────────────────────────────────
-    # 商品選択・プレビュー
-    # ─────────────────────────────────────────────────────────────────
+    def _on_check(self, e, page_id: str, title: str):
+        if e.control.value:
+            self._selected_items[page_id] = title
+        else:
+            self._selected_items.pop(page_id, None)
+        self._refresh_list_colors()
+        self._update_selection_state()
 
-    def _select(self, page_id: str, title: str):
-        if self._is_loading:
-            return
-        self._is_loading = True
-        self.selected_label.value = f"取得中: {title}..."
-        self.selected_label.color = ft.Colors.BLUE
-        self.selected_label.italic = False
+    def _refresh_list_colors(self):
+        for ctrl in self.list_column.controls:
+            row = ctrl.content
+            cb = row.controls[0]
+            pid = None
+            for item in self._current_list:
+                if item["title"] == row.controls[2].value:
+                    pid = item["page_id"]
+                    break
+            is_checked = cb.value
+            ctrl.bgcolor = ft.Colors.GREEN_50 if is_checked else None
+        self.page.update()
+
+    def _update_selection_state(self):
+        n = len(self._selected_items)
+        self.selection_label.value = f"{n}件選択中"
+        self.selection_label.color = ft.Colors.GREEN_800 if n > 0 else ft.Colors.GREY_600
+        self.preview_btn.disabled = n == 0
+        self.export_btn.disabled = n == 0
+        self.page.update()
+
+    def _clear_selection(self, e=None):
+        self._selected_items.clear()
+        self._render_list(self._current_list)
+        self._update_selection_state()
         self.preview_column.visible = False
         self.preview_column.controls.clear()
-        self.export_btn.disabled = True
         self.export_status.value = ""
+        self.page.update()
+
+    # ─────────────────────────────────────────────────────────────────
+    # 選択データ取得
+    # ─────────────────────────────────────────────────────────────────
+
+    def _fetch_selected_data(self) -> list[tuple[str, dict]]:
+        """選択中の全アイテムのプロパティを取得（キャッシュ利用）"""
+        result = []
+        for pid, title in self._selected_items.items():
+            if pid not in self._item_data_cache:
+                data = fetch_all_properties(pid)
+                self._item_data_cache[pid] = data
+            result.append((pid, self._item_data_cache[pid]))
+        return result
+
+    # ─────────────────────────────────────────────────────────────────
+    # プレビュー
+    # ─────────────────────────────────────────────────────────────────
+
+    def on_preview(self, e):
+        if not self._selected_items or self._is_loading:
+            return
+        self._is_loading = True
+        self.preview_btn.disabled = True
+        self.export_btn.disabled = True
+        self.export_status.value = "データ取得中..."
         self.page.update()
 
         def do():
             try:
-                data = fetch_all_properties(page_id)
-                self._page_data = data
+                fetched = self._fetch_selected_data()
 
                 def on_ok():
-                    self._render_preview(data, title)
-                    self.selected_label.value = f"選択中: {title}"
-                    self.selected_label.color = ft.Colors.GREEN_800
-                    self.selected_label.italic = False
+                    self._render_preview(fetched)
                     self.export_btn.disabled = False
+                    self.export_status.value = ""
                     self.page.update()
 
                 self.page.run_thread(on_ok)
@@ -391,55 +421,54 @@ class ReceiptTab:
                 err = ex
 
                 def on_err():
-                    self.selected_label.value = f"エラー: {err}"
-                    self.selected_label.color = ft.Colors.RED
+                    self.export_status.value = f"エラー: {err}"
+                    self.export_status.color = ft.Colors.RED
                     self.page.update()
 
                 self.page.run_thread(on_err)
             finally:
                 def on_fin():
                     self._is_loading = False
+                    self.preview_btn.disabled = False
                     self.page.update()
 
                 self.page.run_thread(on_fin)
 
         threading.Thread(target=do, daemon=True).start()
 
-    def _render_preview(self, data: dict, title: str):
-        """領収書プレビューをUIに描画する"""
-        props = data.get("properties", {})
-
-        # 商品名・金額を取得
-        name_info = props.get("商品名")
-        item_name = name_info.get("value") if name_info else None
-        if not item_name:
-            item_name = title
-
-        amount_info = props.get("売上金")
-        amount_raw = amount_info.get("value") if amount_info else None
-        try:
-            amount = int(amount_raw) if amount_raw is not None else 0
-        except (TypeError, ValueError):
-            amount = 0
-
-        subtotal = amount
-        tax = int(subtotal * 0.1)
-        total = subtotal + tax
-
-        today_str = date.today().strftime("%Y年%m月%d日")
-
-        # ── プレビュー構築 ─────────────────────────────────────────
+    def _render_preview(self, fetched: list[tuple[str, dict]]):
         header_style = ft.TextStyle(size=11, weight=ft.FontWeight.BOLD)
 
-        def cell(text, bold=False, right=False, width=None):
-            return ft.DataCell(
-                ft.Text(
-                    text,
-                    size=11,
-                    weight=ft.FontWeight.BOLD if bold else ft.FontWeight.NORMAL,
-                    text_align=ft.TextAlign.RIGHT if right else ft.TextAlign.LEFT,
-                )
-            )
+        def cell(text, bold=False, right=False):
+            return ft.DataCell(ft.Text(
+                text,
+                size=11,
+                weight=ft.FontWeight.BOLD if bold else ft.FontWeight.NORMAL,
+                text_align=ft.TextAlign.RIGHT if right else ft.TextAlign.LEFT,
+            ))
+
+        rows = []
+        subtotal = 0
+        for idx, (pid, data) in enumerate(fetched):
+            props = data.get("properties", {})
+            name_info = props.get("商品名")
+            item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
+            amount_info = props.get("売上金")
+            try:
+                amount = int(amount_info.get("value") or 0) if amount_info else 0
+            except (TypeError, ValueError):
+                amount = 0
+            subtotal += amount
+            rows.append(ft.DataRow(cells=[
+                cell(str(idx + 1)),
+                cell(item_name),
+                cell("1", right=True),
+                cell(_fmt_currency(amount), right=True),
+            ]))
+
+        tax = int(subtotal * 0.1)
+        total = subtotal + tax
+        today_str = date.today().strftime("%Y年%m月%d日")
 
         item_table = ft.DataTable(
             columns=[
@@ -448,14 +477,7 @@ class ReceiptTab:
                 ft.DataColumn(ft.Text("数量", style=header_style), numeric=True),
                 ft.DataColumn(ft.Text("金額", style=header_style), numeric=True),
             ],
-            rows=[
-                ft.DataRow(cells=[
-                    cell("1"),
-                    cell(str(item_name)),
-                    cell("1", right=True),
-                    cell(_fmt_currency(amount), right=True),
-                ]),
-            ],
+            rows=rows,
             border=ft.border.all(1, ft.Colors.GREY_400),
             border_radius=4,
             column_spacing=20,
@@ -486,7 +508,7 @@ class ReceiptTab:
             column_spacing=20,
         )
 
-        hanko_cell = ft.Container(
+        hanko = ft.Container(
             content=ft.Text(
                 "株式会社アーネスト\n代表取締役\n斉藤 潤",
                 size=10,
@@ -508,15 +530,11 @@ class ReceiptTab:
                 content=ft.Column([
                     ft.Text("領　収　書", size=22, weight=ft.FontWeight.BOLD,
                             text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"発行日: {today_str}", size=11,
-                            text_align=ft.TextAlign.RIGHT),
+                    ft.Text(f"発行日: {today_str}", size=11, text_align=ft.TextAlign.RIGHT),
                     ft.Divider(height=4),
                     item_table,
                     ft.Divider(height=4),
-                    ft.Row([
-                        ft.Container(expand=True),
-                        summary_table,
-                    ]),
+                    ft.Row([ft.Container(expand=True), summary_table]),
                     ft.Divider(height=8),
                     ft.Row([
                         ft.Column([
@@ -524,7 +542,7 @@ class ReceiptTab:
                             ft.Text("代表取締役  斉藤 潤", size=11),
                         ], spacing=2),
                         ft.Container(expand=True),
-                        hanko_cell,
+                        hanko,
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ], spacing=8),
                 padding=ft.padding.all(16),
@@ -540,26 +558,32 @@ class ReceiptTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_export(self, e):
-        if not self._page_data:
+        if not self._selected_items:
             return
 
-        props = self._page_data.get("properties", {})
-        name_info = props.get("商品名")
-        item_name = str(name_info.get("value") or "") if name_info else ""
-        amount_info = props.get("売上金")
-        amount_raw = amount_info.get("value") if amount_info else None
-        try:
-            amount = int(amount_raw) if amount_raw is not None else 0
-        except (TypeError, ValueError):
-            amount = 0
-
         today_str = date.today().strftime("%Y年%m月%d日")
-        fname = f"領収書_{item_name}_{date.today().strftime('%Y%m%d')}.xlsx"
+        fname = f"領収書_{date.today().strftime('%Y%m%d')}.xlsx"
 
         def save_file(ev: ft.FilePickerResultEvent):
-            if ev.path:
+            if not ev.path:
+                return
+
+            def do():
                 try:
-                    _generate_receipt_excel(ev.path, item_name, amount, today_str)
+                    fetched = self._fetch_selected_data()
+                    items_data = []
+                    for pid, data in fetched:
+                        props = data.get("properties", {})
+                        name_info = props.get("商品名")
+                        item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
+                        amount_info = props.get("売上金")
+                        try:
+                            amount = int(amount_info.get("value") or 0) if amount_info else 0
+                        except (TypeError, ValueError):
+                            amount = 0
+                        items_data.append((item_name, amount))
+
+                    _generate_receipt_excel(ev.path, items_data, today_str)
 
                     def on_ok():
                         self.export_status.value = f"保存しました: {ev.path}"
@@ -576,6 +600,8 @@ class ReceiptTab:
                         self.page.update()
 
                     self.page.run_thread(on_err)
+
+            threading.Thread(target=do, daemon=True).start()
 
         file_picker = ft.FilePicker(on_result=save_file)
         self.page.overlay.append(file_picker)
