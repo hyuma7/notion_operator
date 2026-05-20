@@ -3,6 +3,8 @@
 """
 
 import io
+import os
+import sys
 import base64
 from typing import Dict, Any, List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
@@ -55,48 +57,57 @@ class LabelPreviewGenerator:
             
             # フォントの読み込み（日本語対応）
             font_loaded = False
-            
-            # 日本語フォントのパスリスト
-            japanese_fonts = [
-                # WSL からアクセス可能な Windows フォント
-                "/mnt/c/Windows/Fonts/msgothic.ttc",  # MS ゴシック
-                "/mnt/c/Windows/Fonts/meiryo.ttc",    # メイリオ
-                "/mnt/c/Windows/Fonts/YuGothic.ttc",  # 游ゴシック
-                "/mnt/c/Windows/Fonts/msmincho.ttc",  # MS 明朝
-                # Windows
-                "C:/Windows/Fonts/msgothic.ttc",  # MS ゴシック
-                "C:/Windows/Fonts/meiryo.ttc",    # メイリオ
-                "C:/Windows/Fonts/YuGothic.ttc",  # 游ゴシック
-                "C:/Windows/Fonts/msmincho.ttc",  # MS 明朝
-                # macOS
-                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/Library/Fonts/Arial Unicode.ttf",
-                # Linux
-                "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
-            ]
-            
+            # フォントサイズの最小値を保証（0以下になるとエラー）
+            sz_title = max(8, font_size + 4)
+            sz_normal = max(8, font_size)
+            sz_small = max(8, font_size - 2)
+
+            # 日本語フォントのパスリストを OS 別に構築
+            windir = os.environ.get("WINDIR", os.environ.get("SystemRoot", "C:\\Windows"))
+            japanese_fonts = []
+
+            if sys.platform == "win32":
+                fonts_dir = os.path.join(windir, "Fonts")
+                japanese_fonts = [
+                    os.path.join(fonts_dir, "msgothic.ttc"),
+                    os.path.join(fonts_dir, "meiryo.ttc"),
+                    os.path.join(fonts_dir, "YuGothB.ttc"),
+                    os.path.join(fonts_dir, "yugothic.ttf"),
+                    os.path.join(fonts_dir, "msmincho.ttc"),
+                ]
+            else:
+                japanese_fonts = [
+                    # WSL
+                    "/mnt/c/Windows/Fonts/msgothic.ttc",
+                    "/mnt/c/Windows/Fonts/meiryo.ttc",
+                    # macOS
+                    "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                    "/Library/Fonts/Arial Unicode.ttf",
+                    # Linux
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                    "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
+                    "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
+                ]
+
             for font_path in japanese_fonts:
+                if not os.path.exists(font_path):
+                    continue
                 try:
-                    title_font = ImageFont.truetype(font_path, font_size + 4)  # タイトルは指定サイズ+4
-                    normal_font = ImageFont.truetype(font_path, font_size)     # 通常は指定サイズ
-                    small_font = ImageFont.truetype(font_path, font_size - 2)  # 小さいフォントは指定サイズ-2
+                    title_font = ImageFont.truetype(font_path, sz_title)
+                    normal_font = ImageFont.truetype(font_path, sz_normal)
+                    small_font = ImageFont.truetype(font_path, sz_small)
                     font_loaded = True
                     break
-                except:
+                except Exception:
                     continue
-            
-            # 日本語フォントが見つからない場合は英語フォントを試す
+
+            # 日本語フォントが見つからない場合のフォールバック
             if not font_loaded:
                 try:
-                    # Windowsフォントを試す
-                    title_font = ImageFont.truetype("arial.ttf", font_size + 4)
-                    normal_font = ImageFont.truetype("arial.ttf", font_size)
-                    small_font = ImageFont.truetype("arial.ttf", font_size - 2)
-                except:
-                    # デフォルトフォント
+                    title_font = ImageFont.truetype("arial.ttf", sz_title)
+                    normal_font = ImageFont.truetype("arial.ttf", sz_normal)
+                    small_font = ImageFont.truetype("arial.ttf", sz_small)
+                except Exception:
                     title_font = ImageFont.load_default()
                     normal_font = ImageFont.load_default()
                     small_font = ImageFont.load_default()
@@ -203,16 +214,27 @@ class LabelPreviewGenerator:
             
             # 仮のフォントを作成（高さ計算用）
             temp_font = None
-            try:
-                # Windowsフォントを試す
-                import os
-                if os.name == 'nt':  # Windows
-                    from PIL import ImageFont
-                    temp_font = ImageFont.truetype("C:/Windows/Fonts/msgothic.ttc", font_size)
-                else:
-                    temp_font = ImageFont.load_default()
-            except:
-                from PIL import ImageFont
+            _windir = os.environ.get("WINDIR", os.environ.get("SystemRoot", "C:\\Windows"))
+            _candidates = (
+                [
+                    os.path.join(_windir, "Fonts", "msgothic.ttc"),
+                    os.path.join(_windir, "Fonts", "meiryo.ttc"),
+                ]
+                if sys.platform == "win32"
+                else [
+                    "/mnt/c/Windows/Fonts/msgothic.ttc",
+                    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                ]
+            )
+            for _fp in _candidates:
+                if not os.path.exists(_fp):
+                    continue
+                try:
+                    temp_font = ImageFont.truetype(_fp, max(8, font_size))
+                    break
+                except Exception:
+                    continue
+            if temp_font is None:
                 temp_font = ImageFont.load_default()
             
             # レイアウトモードに応じた高さ計算

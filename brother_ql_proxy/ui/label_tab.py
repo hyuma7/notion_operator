@@ -388,18 +388,8 @@ class LabelTab:
             try:
                 props = self._page_data.get("properties", {})
 
-                # 商品名を先頭に追加
+                # 組み合わせペアをエントリとして追加（商品名・IDは除外）
                 printable_fields = []
-                name_info = props.get("商品名")
-                name_value = name_info.get("value") if name_info else None
-                if name_value is not None and name_value != "" and name_value != [] and name_value != {}:
-                    printable_fields.append({
-                        "name": "商品名",
-                        "value": self._fmt(name_value),
-                        "type": name_info.get("type", "") if name_info else "",
-                    })
-
-                # 組み合わせペアをエントリとして追加
                 for pair in LABEL_DISPLAY_PAIRS:
                     combined = self._fmt_pair(props, *pair)
                     if combined:
@@ -488,18 +478,8 @@ class LabelTab:
             try:
                 props = self._page_data.get("properties", {})
 
-                # 商品名を先頭に追加
+                # 組み合わせペアをエントリとして追加（商品名・IDは除外）
                 printable_fields = []
-                name_info = props.get("商品名")
-                name_value = name_info.get("value") if name_info else None
-                if name_value is not None and name_value != "" and name_value != [] and name_value != {}:
-                    printable_fields.append({
-                        "name": "商品名",
-                        "value": self._fmt(name_value),
-                        "type": name_info.get("type", "") if name_info else "",
-                    })
-
-                # 組み合わせペアをエントリとして追加
                 for pair in LABEL_DISPLAY_PAIRS:
                     combined = self._fmt_pair(props, *pair)
                     if combined:
