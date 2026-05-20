@@ -12,8 +12,16 @@ from notion.fetch_page import fetch_recent_items, search_items, fetch_all_proper
 from brother_ql_proxy.notion import LabelPreviewGenerator
 from brother_ql_proxy.utils import convert_to_brother_format
 
-# ラベルに出力するフィールド（順番通り）
-LABEL_FIELDS = ["商品名", "ID", "型番名", "年式", "売上金"]
+# ラベルに出力するフィールド（Notionプロパティ名）
+LABEL_FIELDS = ["商品名", "メーカー", "型番名", "仕入れ先名", "仕入れ日", "販売担当者"]
+
+# ラベル表示時の組み合わせ定義
+# タプル内の複数フィールドは " : " で結合して1行に表示
+LABEL_DISPLAY_PAIRS = [
+    ("メーカー", "型番名"),      # "メーカー値 : 型番名値"
+    ("仕入れ先名", "仕入れ日"),  # "仕入先値 : 仕入れ日値"
+    ("販売担当者",),              # そのまま表示
+]
 
 
 class LabelTab:
@@ -311,14 +319,33 @@ class LabelTab:
     def _render_fields(self, data: dict):
         self.fields_column.controls.clear()
         props = data.get("properties", {})
-        for name in LABEL_FIELDS:
-            info = props.get(name)
-            value = info.get("value") if info else None
-            display = self._fmt(value) if value is not None else "—"
+
+        # 商品名はタイトルとして先頭に表示
+        name_info = props.get("商品名")
+        name_value = name_info.get("value") if name_info else None
+        name_display = self._fmt(name_value) if name_value is not None else "—"
+        self.fields_column.controls.append(
+            ft.Container(
+                content=ft.Row([
+                    ft.Text("商品名", size=13, weight=ft.FontWeight.BOLD, width=100),
+                    ft.Text(name_display, size=13, expand=True,
+                            max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                ]),
+                padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                bgcolor=ft.Colors.GREY_100,
+                border_radius=4,
+            )
+        )
+
+        # 組み合わせペアを1行ずつ表示
+        for pair in LABEL_DISPLAY_PAIRS:
+            combined = self._fmt_pair(props, *pair)
+            label = " : ".join(pair)
+            display = combined if combined else "—"
             self.fields_column.controls.append(
                 ft.Container(
                     content=ft.Row([
-                        ft.Text(name, size=13, weight=ft.FontWeight.BOLD, width=100),
+                        ft.Text(label, size=13, weight=ft.FontWeight.BOLD, width=100),
                         ft.Text(display, size=13, expand=True,
                                 max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
                     ]),
@@ -335,6 +362,16 @@ class LabelTab:
             return ", ".join(f"{k}: {v}" for k, v in value.items() if v is not None)
         return str(value)
 
+    def _fmt_pair(self, props: dict, *field_names) -> str:
+        """複数フィールドの値を ' : ' で結合する（空値はスキップ）"""
+        parts = []
+        for name in field_names:
+            info = props.get(name)
+            value = info.get("value") if info else None
+            if value is not None and value != "" and value != [] and value != {}:
+                parts.append(self._fmt(value))
+        return " : ".join(parts) if parts else ""
+
     # ─────────────────────────────────────────────────────────────────
     # 印刷
     # ─────────────────────────────────────────────────────────────────
@@ -350,15 +387,17 @@ class LabelTab:
         def do():
             try:
                 props = self._page_data.get("properties", {})
+
+                # 組み合わせペアをエントリとして追加（商品名・IDは除外）
                 printable_fields = []
-                for name in LABEL_FIELDS:
-                    info = props.get(name)
-                    value = info.get("value") if info else None
-                    if value is not None and value != "" and value != [] and value != {}:
+                for pair in LABEL_DISPLAY_PAIRS:
+                    combined = self._fmt_pair(props, *pair)
+                    if combined:
+                        entry_name = ":".join(pair) if len(pair) > 1 else pair[0]
                         printable_fields.append({
-                            "name": name,
-                            "value": self._fmt(value),
-                            "type": info.get("type", ""),
+                            "name": entry_name,
+                            "value": combined,
+                            "type": "",
                         })
 
                 page_url = self._page_data.get("url", "")
@@ -438,15 +477,17 @@ class LabelTab:
         def do():
             try:
                 props = self._page_data.get("properties", {})
+
+                # 組み合わせペアをエントリとして追加（商品名・IDは除外）
                 printable_fields = []
-                for name in LABEL_FIELDS:
-                    info = props.get(name)
-                    value = info.get("value") if info else None
-                    if value is not None and value != "" and value != [] and value != {}:
+                for pair in LABEL_DISPLAY_PAIRS:
+                    combined = self._fmt_pair(props, *pair)
+                    if combined:
+                        entry_name = ":".join(pair) if len(pair) > 1 else pair[0]
                         printable_fields.append({
-                            "name": name,
-                            "value": self._fmt(value),
-                            "type": info.get("type", ""),
+                            "name": entry_name,
+                            "value": combined,
+                            "type": "",
                         })
 
                 page_url = self._page_data.get("url", "")
