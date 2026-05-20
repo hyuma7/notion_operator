@@ -22,8 +22,8 @@ def _fmt_currency(value) -> str:
         return "¥0"
 
 
-def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date: str):
-    """複数商品の領収書Excelを生成する"""
+def _generate_receipt_excel(path: str, items: list[tuple[str, str, int]], issue_date: str):
+    """複数商品の領収書Excelを生成する (No./品名/型番/数量/金額)"""
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
@@ -32,10 +32,11 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
     ws.title = "領収書"
 
     ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 30
-    ws.column_dimensions["C"].width = 10
-    ws.column_dimensions["D"].width = 15
-    ws.column_dimensions["E"].width = 12
+    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 8
+    ws.column_dimensions["E"].width = 14
+    ws.column_dimensions["F"].width = 12
 
     ws.row_dimensions[1].height = 40
     ws.row_dimensions[2].height = 20
@@ -49,23 +50,23 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
     hanko_border = Border(left=thick, right=thick, top=thick, bottom=thick)
 
     # タイトル
-    ws.merge_cells("A1:D1")
+    ws.merge_cells("A1:E1")
     c = ws["A1"]
     c.value = "領　収　書"
     c.font = Font(name="MS Gothic", size=24, bold=True)
     c.alignment = Alignment(horizontal="center", vertical="center")
 
     # 発行日
-    ws.merge_cells("A2:D2")
+    ws.merge_cells("A2:E2")
     c = ws["A2"]
     c.value = f"発行日: {issue_date}"
     c.font = Font(name="MS Gothic", size=11)
     c.alignment = Alignment(horizontal="right", vertical="center")
 
-    # ヘッダー行
+    # ヘッダー行: No./品名/型番/数量/金額
     header_row = 4
     ws.row_dimensions[header_row].height = 22
-    for col, label in [(1, "No."), (2, "品名"), (3, "数量"), (4, "金額")]:
+    for col, label in [(1, "No."), (2, "品名"), (3, "型番"), (4, "数量"), (5, "金額")]:
         c = ws.cell(row=header_row, column=col)
         c.value = label
         c.font = Font(name="MS Gothic", size=11, bold=True)
@@ -75,14 +76,15 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
 
     # 商品行
     data_start = header_row + 1
-    for idx, (item_name, amount) in enumerate(items):
+    for idx, (item_name, model_number, amount) in enumerate(items):
         r = data_start + idx
         ws.row_dimensions[r].height = 20
         for col, val, fmt, align in [
             (1, idx + 1, None, "center"),
             (2, item_name, None, "left"),
-            (3, 1, None, "center"),
-            (4, amount, '"¥"#,##0', "right"),
+            (3, model_number, None, "left"),
+            (4, 1, None, "center"),
+            (5, amount, '"¥"#,##0', "right"),
         ]:
             c = ws.cell(row=r, column=col)
             c.value = val
@@ -92,8 +94,8 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
             if fmt:
                 c.number_format = fmt
 
-    # 合計ブロック
-    subtotal = sum(a for _, a in items)
+    # 合計ブロック (列D=ラベル, 列E=金額)
+    subtotal = sum(a for _, _, a in items)
     tax = int(subtotal * 0.1)
     total = subtotal + tax
 
@@ -105,13 +107,13 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
     ]):
         r = summary_start + i
         ws.row_dimensions[r].height = 22
-        lc = ws.cell(row=r, column=3)
+        lc = ws.cell(row=r, column=4)
         lc.value = label
         lc.font = Font(name="MS Gothic", size=11, bold=bold)
         lc.alignment = Alignment(horizontal="right", vertical="center")
         lc.border = total_border if bold else header_border
 
-        vc = ws.cell(row=r, column=4)
+        vc = ws.cell(row=r, column=5)
         vc.value = value
         vc.font = Font(name="MS Gothic", size=12 if bold else 11, bold=bold)
         vc.alignment = Alignment(horizontal="right", vertical="center")
@@ -130,8 +132,8 @@ def _generate_receipt_excel(path: str, items: list[tuple[str, int]], issue_date:
 
     hanko_r1 = sign_start
     hanko_r2 = sign_start + 2
-    ws.merge_cells(f"D{hanko_r1}:E{hanko_r2}")
-    hc = ws.cell(row=hanko_r1, column=4)
+    ws.merge_cells(f"E{hanko_r1}:F{hanko_r2}")
+    hc = ws.cell(row=hanko_r1, column=5)
     hc.value = "株式会社アーネスト\n代表取締役\n斉藤 潤"
     hc.font = Font(name="MS Gothic", size=10, bold=True, color="8B0000")
     hc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -453,6 +455,8 @@ class ReceiptTab:
             props = data.get("properties", {})
             name_info = props.get("商品名")
             item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
+            model_info = props.get("型番名")
+            model_number = str(model_info.get("value") or "") if model_info else ""
             amount_info = props.get("売上金")
             try:
                 amount = int(amount_info.get("value") or 0) if amount_info else 0
@@ -462,6 +466,7 @@ class ReceiptTab:
             rows.append(ft.DataRow(cells=[
                 cell(str(idx + 1)),
                 cell(item_name),
+                cell(model_number),
                 cell("1", right=True),
                 cell(_fmt_currency(amount), right=True),
             ]))
@@ -474,6 +479,7 @@ class ReceiptTab:
             columns=[
                 ft.DataColumn(ft.Text("No.", style=header_style)),
                 ft.DataColumn(ft.Text("品名", style=header_style)),
+                ft.DataColumn(ft.Text("型番", style=header_style)),
                 ft.DataColumn(ft.Text("数量", style=header_style), numeric=True),
                 ft.DataColumn(ft.Text("金額", style=header_style), numeric=True),
             ],
@@ -576,12 +582,14 @@ class ReceiptTab:
                         props = data.get("properties", {})
                         name_info = props.get("商品名")
                         item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
+                        model_info = props.get("型番名")
+                        model_number = str(model_info.get("value") or "") if model_info else ""
                         amount_info = props.get("売上金")
                         try:
                             amount = int(amount_info.get("value") or 0) if amount_info else 0
                         except (TypeError, ValueError):
                             amount = 0
-                        items_data.append((item_name, amount))
+                        items_data.append((item_name, model_number, amount))
 
                     _generate_receipt_excel(ev.path, items_data, today_str)
 
