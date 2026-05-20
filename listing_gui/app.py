@@ -20,12 +20,13 @@ def _try_load_proxy_tabs(proxy, page) -> dict:
     """brother_ql_proxy のタブを読み込む。失敗時は空辞書を返す"""
     try:
         from brother_ql_proxy.ui import (
-            create_config_tab, create_export_tab, create_label_tab,
+            create_config_tab, create_export_tab, create_label_tab, create_receipt_tab,
         )
         config_tab, _ = create_config_tab(proxy, page)
         export_tab, _ = create_export_tab(proxy, page)
         label_tab, _ = create_label_tab(proxy, page)
-        return {"label": label_tab, "export": export_tab, "config": config_tab}
+        receipt_tab, _ = create_receipt_tab(proxy, page)
+        return {"label": label_tab, "export": export_tab, "receipt": receipt_tab, "config": config_tab}
     except Exception as ex:
         print(f"[WARN] プリンタープロキシのロードに失敗しました: {ex}")
         return {}
@@ -50,13 +51,15 @@ def main(page: ft.Page):
     except Exception as ex:
         print(f"[WARN] プリンタープロキシの初期化に失敗しました: {ex}")
 
-    # タブ順: ラベル印刷 > 出品 > Excel出力 > 設定
+    # タブ順: ラベル印刷 > 出品 > Excel出力 > 領収書 > 設定
     all_tabs = []
     if "label" in proxy_tabs:
         all_tabs.append(proxy_tabs["label"])
     all_tabs.append(listing_tab)
     if "export" in proxy_tabs:
         all_tabs.append(proxy_tabs["export"])
+    if "receipt" in proxy_tabs:
+        all_tabs.append(proxy_tabs["receipt"])
     if "config" in proxy_tabs:
         all_tabs.append(proxy_tabs["config"])
 
