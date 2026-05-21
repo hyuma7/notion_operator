@@ -54,6 +54,61 @@ class ConfigTab:
             width=300
         )
 
+        stamp_lines = proxy.config.get('issuer_stamp_lines', [])
+        if isinstance(stamp_lines, str):
+            stamp_text = stamp_lines
+        else:
+            stamp_text = "\n".join(str(line) for line in stamp_lines)
+
+        self.issuer_company_name_field = ft.TextField(
+            label="発行者名（会社名）",
+            value=proxy.config.get('issuer_company_name', ''),
+            width=420,
+            dense=True,
+        )
+
+        self.issuer_representative_field = ft.TextField(
+            label="代表者・担当者名",
+            value=proxy.config.get('issuer_representative', ''),
+            width=420,
+            dense=True,
+        )
+
+        self.issuer_address_field = ft.TextField(
+            label="住所",
+            value=proxy.config.get('issuer_address', ''),
+            width=520,
+            dense=True,
+            multiline=True,
+            min_lines=1,
+            max_lines=2,
+        )
+
+        self.issuer_tel_field = ft.TextField(
+            label="電話・FAX",
+            value=proxy.config.get('issuer_tel', ''),
+            width=420,
+            dense=True,
+        )
+
+        self.issuer_stamp_lines_field = ft.TextField(
+            label="印影の文字（1行ずつ）",
+            value=stamp_text,
+            width=300,
+            dense=True,
+            multiline=True,
+            min_lines=4,
+            max_lines=4,
+        )
+
+        self.issuer_stamp_image_path_field = ft.TextField(
+            label="印影画像パス（任意）",
+            value=proxy.config.get('issuer_stamp_image_path', ''),
+            width=520,
+            dense=True,
+            hint_text="例: C:\\stamps\\inkan.png",
+        )
+
         self.save_btn = ft.ElevatedButton(
             "設定を保存",
             icon=ft.Icons.SAVE,
@@ -69,6 +124,18 @@ class ConfigTab:
             self.proxy.config['notion_api_key'] = self.notion_api_key_field.value
             self.proxy.config['notion_database_id'] = self.notion_database_id_field.value
             self.proxy.config['vercel_base_url'] = self.vercel_base_url_field.value.rstrip('/')
+            self.proxy.config['issuer_company_name'] = (self.issuer_company_name_field.value or "").strip()
+            self.proxy.config['issuer_representative'] = (self.issuer_representative_field.value or "").strip()
+            self.proxy.config['issuer_address'] = (self.issuer_address_field.value or "").strip()
+            self.proxy.config['issuer_tel'] = (self.issuer_tel_field.value or "").strip()
+            self.proxy.config['issuer_stamp_lines'] = [
+                line.strip()
+                for line in (self.issuer_stamp_lines_field.value or "").splitlines()
+                if line.strip()
+            ]
+            self.proxy.config['issuer_stamp_image_path'] = (
+                self.issuer_stamp_image_path_field.value or ""
+            ).strip()
 
             self.proxy.save_config()
             self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
@@ -123,6 +190,22 @@ class ConfigTab:
                                     "設定するとQRコードがVercel URLになります（未設定はNotionページURL）",
                                     size=11, color=ft.Colors.GREY_500,
                                 ),
+                            ])
+                        )
+                    ),
+                    ft.Card(
+                        content=ft.Container(
+                            padding=ft.padding.all(20),
+                            content=ft.Column([
+                                ft.Text("請求書・領収証の発行者", size=18, weight=ft.FontWeight.BOLD),
+                                ft.Divider(),
+                                self.issuer_company_name_field,
+                                self.issuer_representative_field,
+                                self.issuer_address_field,
+                                self.issuer_tel_field,
+                                ft.Divider(height=4),
+                                self.issuer_stamp_lines_field,
+                                self.issuer_stamp_image_path_field,
                             ])
                         )
                     ),

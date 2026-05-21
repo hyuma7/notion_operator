@@ -3,7 +3,7 @@
 - Notionから直近30件取得 or 商品名で検索
 - チェックボックスで複数選択
 - 選択した商品の領収書プレビューを表示
-- Excel形式で領収書を出力
+- PDF形式で請求書・領収証を出力
 """
 
 import os
@@ -12,6 +12,11 @@ from datetime import date
 import flet as ft
 
 from notion.fetch_page import fetch_recent_items, search_items, fetch_all_properties
+from .export.pdf_service import (
+    generate_invoice_receipt_pdf,
+    issuer_info_from_config,
+    MAX_INVOICE_ROWS_PER_PAGE,
+)
 
 
 def _fmt_currency(value) -> str:
@@ -20,129 +25,6 @@ def _fmt_currency(value) -> str:
         return f"¥{n:,}"
     except (TypeError, ValueError):
         return "¥0"
-
-
-def _generate_receipt_excel(path: str, items: list[tuple[str, str, int]], issue_date: str):
-    """複数商品の領収書Excelを生成する (No./品名/型番/数量/金額)"""
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "領収書"
-
-    ws.column_dimensions["A"].width = 8
-    ws.column_dimensions["B"].width = 28
-    ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 8
-    ws.column_dimensions["E"].width = 14
-    ws.column_dimensions["F"].width = 12
-
-    ws.row_dimensions[1].height = 40
-    ws.row_dimensions[2].height = 20
-
-    thin = Side(style="thin")
-    medium = Side(style="medium")
-    thick = Side(style="thick")
-    header_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    data_border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    total_border = Border(left=thin, right=thin, top=thin, bottom=medium)
-    hanko_border = Border(left=thick, right=thick, top=thick, bottom=thick)
-
-    # タイトル
-    ws.merge_cells("A1:E1")
-    c = ws["A1"]
-    c.value = "領　収　書"
-    c.font = Font(name="MS Gothic", size=24, bold=True)
-    c.alignment = Alignment(horizontal="center", vertical="center")
-
-    # 発行日
-    ws.merge_cells("A2:E2")
-    c = ws["A2"]
-    c.value = f"発行日: {issue_date}"
-    c.font = Font(name="MS Gothic", size=11)
-    c.alignment = Alignment(horizontal="right", vertical="center")
-
-    # ヘッダー行: No./品名/型番/数量/金額
-    header_row = 4
-    ws.row_dimensions[header_row].height = 22
-    for col, label in [(1, "No."), (2, "品名"), (3, "型番"), (4, "数量"), (5, "金額")]:
-        c = ws.cell(row=header_row, column=col)
-        c.value = label
-        c.font = Font(name="MS Gothic", size=11, bold=True)
-        c.alignment = Alignment(horizontal="center", vertical="center")
-        c.border = header_border
-        c.fill = PatternFill(fill_type="solid", fgColor="D9D9D9")
-
-    # 商品行
-    data_start = header_row + 1
-    for idx, (item_name, model_number, amount) in enumerate(items):
-        r = data_start + idx
-        ws.row_dimensions[r].height = 20
-        for col, val, fmt, align in [
-            (1, idx + 1, None, "center"),
-            (2, item_name, None, "left"),
-            (3, model_number, None, "left"),
-            (4, 1, None, "center"),
-            (5, amount, '"¥"#,##0', "right"),
-        ]:
-            c = ws.cell(row=r, column=col)
-            c.value = val
-            c.font = Font(name="MS Gothic", size=11)
-            c.alignment = Alignment(horizontal=align, vertical="center")
-            c.border = data_border
-            if fmt:
-                c.number_format = fmt
-
-    # 合計ブロック (列D=ラベル, 列E=金額)
-    subtotal = sum(a for _, _, a in items)
-    tax = int(subtotal * 0.1)
-    total = subtotal + tax
-
-    summary_start = data_start + len(items) + 2
-    for i, (label, value, bold) in enumerate([
-        ("小計", subtotal, False),
-        ("消費税(10%)", tax, False),
-        ("合計", total, True),
-    ]):
-        r = summary_start + i
-        ws.row_dimensions[r].height = 22
-        lc = ws.cell(row=r, column=4)
-        lc.value = label
-        lc.font = Font(name="MS Gothic", size=11, bold=bold)
-        lc.alignment = Alignment(horizontal="right", vertical="center")
-        lc.border = total_border if bold else header_border
-
-        vc = ws.cell(row=r, column=5)
-        vc.value = value
-        vc.font = Font(name="MS Gothic", size=12 if bold else 11, bold=bold)
-        vc.alignment = Alignment(horizontal="right", vertical="center")
-        vc.border = total_border if bold else header_border
-        vc.number_format = '"¥"#,##0'
-
-    # 署名・ハンコ
-    sign_start = summary_start + 5
-    for i, text in enumerate(["株式会社アーネスト", "代表取締役  斉藤 潤"]):
-        r = sign_start + i
-        ws.row_dimensions[r].height = 22
-        c = ws.cell(row=r, column=1)
-        c.value = text
-        c.font = Font(name="MS Gothic", size=11)
-        c.alignment = Alignment(horizontal="left", vertical="center")
-
-    hanko_r1 = sign_start
-    hanko_r2 = sign_start + 2
-    ws.merge_cells(f"E{hanko_r1}:F{hanko_r2}")
-    hc = ws.cell(row=hanko_r1, column=5)
-    hc.value = "株式会社アーネスト\n代表取締役\n斉藤 潤"
-    hc.font = Font(name="MS Gothic", size=10, bold=True, color="8B0000")
-    hc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    hc.border = hanko_border
-    hc.fill = PatternFill(fill_type="solid", fgColor="FFE4E1")
-    for r in range(hanko_r1, hanko_r2 + 1):
-        ws.row_dimensions[r].height = 22
-
-    wb.save(path)
 
 
 class ReceiptTab:
@@ -197,6 +79,19 @@ class ReceiptTab:
             on_click=self._clear_selection,
         )
 
+        self.recipient_field = ft.TextField(
+            label="請求先・宛名",
+            hint_text="例: 株式会社〇〇",
+            dense=True,
+            expand=True,
+        )
+        self.receipt_note_field = ft.TextField(
+            label="但し書き",
+            value="上記金額正に領収いたしました",
+            dense=True,
+            expand=True,
+        )
+
         self.preview_column = ft.Column(controls=[], spacing=4, visible=False)
 
         self.preview_btn = ft.ElevatedButton(
@@ -208,10 +103,10 @@ class ReceiptTab:
             disabled=True,
         )
         self.export_btn = ft.ElevatedButton(
-            "Excel出力",
-            icon=ft.Icons.TABLE_VIEW,
+            "PDF出力",
+            icon=ft.Icons.PICTURE_AS_PDF,
             on_click=self.on_export,
-            bgcolor=ft.Colors.GREEN_700,
+            bgcolor=ft.Colors.RED_700,
             color=ft.Colors.WHITE,
             disabled=True,
         )
@@ -242,6 +137,18 @@ class ReceiptTab:
                     self.selection_label,
                     self.clear_btn,
                 ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Divider(height=6),
+
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text("発行内容", size=14, weight=ft.FontWeight.BOLD),
+                        ft.Row([self.recipient_field, self.receipt_note_field], spacing=10),
+                    ], spacing=8),
+                    border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
+                    border_radius=6,
+                    padding=ft.padding.all(12),
+                    bgcolor=ft.Colors.BLUE_GREY_50,
+                ),
                 ft.Divider(height=6),
 
                 self.preview_column,
@@ -395,6 +302,18 @@ class ReceiptTab:
             result.append((pid, self._item_data_cache[pid]))
         return result
 
+    def _get_recipient(self) -> str:
+        return (self.recipient_field.value or "").strip()
+
+    def _get_receipt_note(self) -> str:
+        return (self.receipt_note_field.value or "").strip() or "上記金額正に領収いたしました"
+
+    def _get_issuer(self) -> dict[str, object]:
+        return issuer_info_from_config(self.proxy.config)
+
+    def _invoice_page_count(self, item_count: int) -> int:
+        return max(1, (item_count + MAX_INVOICE_ROWS_PER_PAGE - 1) // MAX_INVOICE_ROWS_PER_PAGE)
+
     # ─────────────────────────────────────────────────────────────────
     # プレビュー
     # ─────────────────────────────────────────────────────────────────
@@ -474,6 +393,10 @@ class ReceiptTab:
         tax = int(subtotal * 0.1)
         total = subtotal + tax
         today_str = date.today().strftime("%Y年%m月%d日")
+        recipient = self._get_recipient()
+        receipt_note = self._get_receipt_note()
+        issuer = self._get_issuer()
+        page_count = self._invoice_page_count(len(fetched))
 
         item_table = ft.DataTable(
             columns=[
@@ -514,41 +437,67 @@ class ReceiptTab:
             column_spacing=20,
         )
 
-        hanko = ft.Container(
-            content=ft.Text(
-                "株式会社アーネスト\n代表取締役\n斉藤 潤",
-                size=10,
+        stamp_lines = [str(line) for line in (issuer.get("stamp_lines") or []) if str(line).strip()]
+        stamp_image_path = str(issuer.get("stamp_image_path") or "")
+        if stamp_image_path and os.path.exists(stamp_image_path):
+            hanko_content = ft.Image(src=stamp_image_path, fit=ft.ImageFit.CONTAIN, opacity=0.6)
+            hanko_border = None
+            hanko_bgcolor = None
+        else:
+            hanko_content = ft.Text(
+                "\n".join(stamp_lines[:5]),
+                size=9,
                 weight=ft.FontWeight.BOLD,
-                color=ft.Colors.RED_900,
+                color=ft.Colors.with_opacity(0.6, ft.Colors.RED_900),
                 text_align=ft.TextAlign.CENTER,
-            ),
-            width=110,
+            )
+            hanko_border = ft.border.all(2, ft.Colors.with_opacity(0.45, ft.Colors.RED_900))
+            hanko_bgcolor = ft.Colors.with_opacity(0.12, ft.Colors.RED_200)
+
+        # ハンコ（1個のみ・左寄り・半透明）
+        hanko = ft.Container(
+            content=hanko_content,
+            width=80,
             height=80,
-            border=ft.border.all(3, ft.Colors.RED_900),
-            border_radius=4,
-            bgcolor=ft.Colors.with_opacity(0.15, ft.Colors.RED_200),
+            border=hanko_border,
+            border_radius=40,
+            bgcolor=hanko_bgcolor,
             alignment=ft.alignment.center,
-            padding=ft.padding.all(6),
+            padding=ft.padding.all(4),
         )
+
+        # 発行者情報ブロック（右寄り）
+        issuer_block = ft.Column([
+            ft.Text(str(issuer.get("company_name", "")), size=10),
+            ft.Text(str(issuer.get("representative", "")), size=10),
+            ft.Text(str(issuer.get("address", "")), size=9, color=ft.Colors.GREY_700),
+            ft.Text(str(issuer.get("tel", "")), size=9, color=ft.Colors.GREY_700),
+        ], spacing=2)
 
         self.preview_column.controls = [
             ft.Container(
                 content=ft.Column([
-                    ft.Text("領　収　書", size=22, weight=ft.FontWeight.BOLD,
+                    ft.Text("請　求　書", size=18, weight=ft.FontWeight.BOLD,
                             text_align=ft.TextAlign.CENTER),
-                    ft.Text(f"発行日: {today_str}", size=11, text_align=ft.TextAlign.RIGHT),
+                    ft.Row([
+                        ft.Text(f"{recipient or '　　　　　　　　　'}　御中", size=12, expand=True),
+                        ft.Text(f"発行日：{today_str}", size=10),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    ft.Text(f"PDF {page_count}ページ", size=10, color=ft.Colors.BLUE_GREY_500),
                     ft.Divider(height=4),
                     item_table,
                     ft.Divider(height=4),
                     ft.Row([ft.Container(expand=True), summary_table]),
-                    ft.Divider(height=8),
+                    ft.Divider(height=10, color=ft.Colors.GREY_400),
+                    ft.Text("領　収　証", size=18, weight=ft.FontWeight.BOLD,
+                            text_align=ft.TextAlign.CENTER),
+                    ft.Text(f"{recipient or '　　　　　　　　　'}　様", size=11),
+                    ft.Text(f"金　¥{total:,} -", size=15, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"但し　{receipt_note}", size=10),
                     ft.Row([
-                        ft.Column([
-                            ft.Text("株式会社アーネスト", size=11),
-                            ft.Text("代表取締役  斉藤 潤", size=11),
-                        ], spacing=2),
-                        ft.Container(expand=True),
                         hanko,
+                        ft.Container(expand=True),
+                        issuer_block,
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 ], spacing=8),
                 padding=ft.padding.all(16),
@@ -560,7 +509,7 @@ class ReceiptTab:
         self.preview_column.visible = True
 
     # ─────────────────────────────────────────────────────────────────
-    # Excel出力
+    # PDF出力
     # ─────────────────────────────────────────────────────────────────
 
     def on_export(self, e):
@@ -568,7 +517,7 @@ class ReceiptTab:
             return
 
         today_str = date.today().strftime("%Y年%m月%d日")
-        fname = f"領収書_{date.today().strftime('%Y%m%d')}.xlsx"
+        fname = f"請求書_{date.today().strftime('%Y%m%d')}.pdf"
 
         def save_file(ev: ft.FilePickerResultEvent):
             if not ev.path:
@@ -591,7 +540,14 @@ class ReceiptTab:
                             amount = 0
                         items_data.append((item_name, model_number, amount))
 
-                    _generate_receipt_excel(ev.path, items_data, today_str)
+                    generate_invoice_receipt_pdf(
+                        ev.path,
+                        items_data,
+                        today_str,
+                        recipient=self._get_recipient(),
+                        issuer=self._get_issuer(),
+                        receipt_note=self._get_receipt_note(),
+                    )
 
                     def on_ok():
                         self.export_status.value = f"保存しました: {ev.path}"
@@ -615,10 +571,10 @@ class ReceiptTab:
         self.page.overlay.append(file_picker)
         self.page.update()
         file_picker.save_file(
-            dialog_title="領収書Excelを保存",
+            dialog_title="請求書・領収証PDFを保存",
             file_name=fname,
             file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["xlsx"],
+            allowed_extensions=["pdf"],
         )
 
     # ─────────────────────────────────────────────────────────────────
