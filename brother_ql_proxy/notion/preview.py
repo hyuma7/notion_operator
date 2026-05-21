@@ -3,10 +3,21 @@
 """
 
 import io
+import sys
+import os
 import base64
 from typing import Dict, Any, List, Optional, Tuple
 from PIL import Image, ImageDraw, ImageFont
 import qrcode
+
+
+def _bundled_font(filename: str) -> str:
+    """同梱フォントの絶対パスを返す（PyInstaller exe でも動作）"""
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+        return os.path.join(base, "brother_ql_proxy", "fonts", filename)
+    fonts_dir = os.path.join(os.path.dirname(__file__), "..", "fonts")
+    return os.path.normpath(os.path.join(fonts_dir, filename))
 
 
 class LabelPreviewGenerator:
@@ -55,48 +66,36 @@ class LabelPreviewGenerator:
             
             # フォントの読み込み（日本語対応）
             font_loaded = False
-            
-            # 日本語フォントのパスリスト
+
+            # 優先順: 同梱フォント → Windows → macOS → Linux
             japanese_fonts = [
-                # WSL からアクセス可能な Windows フォント
-                "/mnt/c/Windows/Fonts/msgothic.ttc",  # MS ゴシック
-                "/mnt/c/Windows/Fonts/meiryo.ttc",    # メイリオ
-                "/mnt/c/Windows/Fonts/YuGothic.ttc",  # 游ゴシック
-                "/mnt/c/Windows/Fonts/msmincho.ttc",  # MS 明朝
-                # Windows
-                "C:/Windows/Fonts/msgothic.ttc",  # MS ゴシック
-                "C:/Windows/Fonts/meiryo.ttc",    # メイリオ
-                "C:/Windows/Fonts/YuGothic.ttc",  # 游ゴシック
-                "C:/Windows/Fonts/msmincho.ttc",  # MS 明朝
-                # macOS
+                _bundled_font("NotoSansJP-Regular.ttf"),
+                "C:/Windows/Fonts/msgothic.ttc",
+                "C:/Windows/Fonts/meiryo.ttc",
+                "C:/Windows/Fonts/YuGothic.ttc",
+                "/mnt/c/Windows/Fonts/msgothic.ttc",
+                "/mnt/c/Windows/Fonts/meiryo.ttc",
                 "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/Library/Fonts/Arial Unicode.ttf",
-                # Linux
-                "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
                 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
                 "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
             ]
-            
+
             for font_path in japanese_fonts:
                 try:
-                    title_font = ImageFont.truetype(font_path, font_size + 4)  # タイトルは指定サイズ+4
-                    normal_font = ImageFont.truetype(font_path, font_size)     # 通常は指定サイズ
-                    small_font = ImageFont.truetype(font_path, font_size - 2)  # 小さいフォントは指定サイズ-2
+                    title_font = ImageFont.truetype(font_path, font_size + 4)
+                    normal_font = ImageFont.truetype(font_path, font_size)
+                    small_font = ImageFont.truetype(font_path, font_size - 2)
                     font_loaded = True
                     break
-                except:
+                except Exception:
                     continue
-            
-            # 日本語フォントが見つからない場合は英語フォントを試す
+
             if not font_loaded:
                 try:
-                    # Windowsフォントを試す
                     title_font = ImageFont.truetype("arial.ttf", font_size + 4)
                     normal_font = ImageFont.truetype("arial.ttf", font_size)
                     small_font = ImageFont.truetype("arial.ttf", font_size - 2)
-                except:
-                    # デフォルトフォント
+                except Exception:
                     title_font = ImageFont.load_default()
                     normal_font = ImageFont.load_default()
                     small_font = ImageFont.load_default()
@@ -203,16 +202,15 @@ class LabelPreviewGenerator:
             
             # 仮のフォントを作成（高さ計算用）
             temp_font = None
-            try:
-                # Windowsフォントを試す
-                import os
-                if os.name == 'nt':  # Windows
-                    from PIL import ImageFont
-                    temp_font = ImageFont.truetype("C:/Windows/Fonts/msgothic.ttc", font_size)
-                else:
-                    temp_font = ImageFont.load_default()
-            except:
-                from PIL import ImageFont
+            for fp in [_bundled_font("NotoSansJP-Regular.ttf"),
+                       "C:/Windows/Fonts/msgothic.ttc",
+                       "/mnt/c/Windows/Fonts/msgothic.ttc"]:
+                try:
+                    temp_font = ImageFont.truetype(fp, font_size)
+                    break
+                except Exception:
+                    continue
+            if temp_font is None:
                 temp_font = ImageFont.load_default()
             
             # レイアウトモードに応じた高さ計算
@@ -228,23 +226,15 @@ class LabelPreviewGenerator:
                 current_y += column_height
             else:
                 # 縦並び（デフォルト）の場合
+                line_height = font_size + 6
+                field_spacing = font_size // 2
                 for field in printable_fields:
-                    field_name = field.get('name', '')
                     field_value = field.get('value', '')
-                    
-                    # 短い値の場合は横並び、長い値の場合は縦並び
-                    if len(field_value) <= 30:
-                        # 横並び（同じ行）の場合
-                        current_y += font_size + 3
-                    else:
-                        # 縦並び（次の行）の場合
-                        current_y += (font_size - 2) + 2  # フィールド名の高さ
-                        value_lines = self.wrap_text(field_value, temp_font, text_width - 10, font_size)
-                        for _ in value_lines:
-                            current_y += font_size + 3
-                    
-                    # フィールド間の間隔
-                    current_y += 5
+                    if not field_value:
+                        continue
+                    value_lines = self.wrap_text(field_value, temp_font, text_width - 10, font_size)
+                    current_y += len(value_lines) * line_height
+                    current_y += field_spacing
             
             # 下マージンを追加
             required_height = current_y + 30
@@ -265,52 +255,32 @@ class LabelPreviewGenerator:
             # エラーの場合は最小高さを返す
             return min_height
     
-    def _draw_vertical_layout(self, draw, printable_fields, normal_font, small_font, 
+    def _draw_vertical_layout(self, draw, printable_fields, normal_font, small_font,
                              width, height, qr_width, font_size, auto_extend_height):
-        """縦並びレイアウトで描画"""
-        text_width = width - qr_width - 20  # 左マージン10 + QRコードとの間隔10
+        """縦並びレイアウトで描画（値のみ・フィールド名なし）"""
+        text_width = width - qr_width - 20
         text_x = 10
+        line_height = font_size + 6      # 行間（読みやすさのため少し広め）
+        field_spacing = font_size // 2   # フィールド間の余白
+
         current_y = 10
-        
-        for i, field in enumerate(printable_fields):
-            field_name = field.get('name', '')
+
+        for field in printable_fields:
             field_value = field.get('value', '')
-            
-            # フィールド名の幅を計算
-            name_text = f"{field_name}:"
-            try:
-                name_bbox = small_font.getbbox(name_text)
-                name_width = name_bbox[2] - name_bbox[0] + 5  # 5px間隔
-            except:
-                name_width = len(name_text) * (font_size * 0.5) + 5  # フォールバック
-            
-            # フィールド名を描画
-            draw.text((text_x, current_y), name_text, fill='gray', font=small_font)
-            
-            # フィールド値を名前の横に描画（短い場合）
-            value_text_width = text_width - name_width
-            
-            # 値が短い場合は同じ行に、長い場合は次の行に
-            if len(field_value) <= 30:  # 短いテキストの場合
-                # 同じ行に描画
-                draw.text((text_x + name_width, current_y), field_value, fill='black', font=normal_font)
-                current_y += font_size + 3
-            else:
-                # 長いテキストの場合は次の行に
-                current_y += (font_size - 2) + 2
-                value_lines = self.wrap_text(field_value, normal_font, text_width - text_x, font_size)
-                for line in value_lines:
-                    if not auto_extend_height and current_y + font_size > height - 10:
-                        break
-                    draw.text((text_x, current_y), line, fill='black', font=normal_font)
-                    current_y += font_size + 3
-            
-            # フィールド間の間隔
-            current_y += 5
-            
-            # 動的高さが有効でない場合のみスペース制限
+            if not field_value:
+                continue
+
+            value_lines = self.wrap_text(field_value, normal_font, text_width, font_size)
+            for line in value_lines:
+                if not auto_extend_height and current_y + font_size > height - 10:
+                    break
+                draw.text((text_x, current_y), line, fill='black', font=normal_font)
+                current_y += line_height
+
+            current_y += field_spacing
+
             if not auto_extend_height and current_y > height - 30:
-                break  # 残りスペースが少ない場合は停止
+                break
     
     def _draw_horizontal_layout(self, draw, printable_fields, normal_font, small_font, 
                                width, height, qr_width, font_size, auto_extend_height, columns):
