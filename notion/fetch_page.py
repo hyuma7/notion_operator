@@ -89,7 +89,7 @@ class PageData:
     properties: dict[str, PropertyValue] = field(default_factory=dict)
 
     def dump(self) -> dict:
-        """JSON化可能な辞書に変換。notion_tab.py などから参照される形式を維持する"""
+        """JSON化可能な辞書に変換。UI側から参照される形式を維持する"""
         return {
             "page_id": self.page_id,
             "url": self.url,
