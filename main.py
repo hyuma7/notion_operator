@@ -1,7 +1,12 @@
+import os
 import flet as ft
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# PDF一時ダウンロード用ディレクトリ（Fletがweb modeでstatic配信する）
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 
 def _try_load_proxy_tabs(proxy, page) -> dict:
@@ -68,4 +73,4 @@ def main(page: ft.Page):
 
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    ft.app(target=main, assets_dir=DOWNLOADS_DIR)

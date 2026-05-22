@@ -9,6 +9,7 @@ reportlab座標系メモ:
 
 from __future__ import annotations
 
+import glob
 import os
 from collections.abc import Mapping, Sequence
 
@@ -21,10 +22,11 @@ STAMP_LINES = ["株式会社", "アーネスト", "代表取締役", "齊藤 淳
 MAX_INVOICE_ROWS_PER_PAGE = 20
 
 _JA_FONT_REGISTERED = False
+_JA_FONT_NAME = "JaFont"
 
 
 def _ensure_ja_font():
-    global _JA_FONT_REGISTERED
+    global _JA_FONT_REGISTERED, _JA_FONT_NAME
     if _JA_FONT_REGISTERED:
         return
 
@@ -32,10 +34,24 @@ def _ensure_ja_font():
     from reportlab.pdfbase.ttfonts import TTFont
 
     candidates = [
+        # Windows
         "C:/Windows/Fonts/YuGothR.ttc",
         "C:/Windows/Fonts/msgothic.ttc",
         "C:/Windows/Fonts/meiryo.ttc",
+        # Linux (Noto CJK – fonts-noto-cjk パッケージ)
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.ttc",
+        # Linux (IPA Gothic – fonts-ipafont-gothic パッケージ)
+        "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
+        "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
+        # Linux (Takao – fonts-takao-gothic パッケージ)
+        "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
     ]
+    # インストール場所がバージョンにより異なるためglobで補完
+    candidates += glob.glob("/usr/share/fonts/**/Noto*CJK*Regular*.ttc", recursive=True)
+    candidates += glob.glob("/usr/share/fonts/**/Noto*CJK*Regular*.otf", recursive=True)
+    candidates += glob.glob("/usr/share/fonts/**/ipag*.ttf", recursive=True)
+
     for font_path in candidates:
         if not os.path.exists(font_path):
             continue
@@ -43,13 +59,25 @@ def _ensure_ja_font():
             try:
                 pdfmetrics.registerFont(TTFont("JaFont", font_path, **kwargs))
                 _JA_FONT_REGISTERED = True
+                _JA_FONT_NAME = "JaFont"
                 return
             except Exception:
                 continue
 
+    # フォールバック: ReportLab組み込みCIDフォント（インストール不要・日本語対応）
+    try:
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        pdfmetrics.registerFont(UnicodeCIDFont("HeiseiKakuGo-W5"))
+        _JA_FONT_REGISTERED = True
+        _JA_FONT_NAME = "HeiseiKakuGo-W5"
+        return
+    except Exception:
+        pass
+
     raise RuntimeError(
         "日本語フォントの登録に失敗しました。"
-        "Yu Gothic / MS Gothic / Meiryo のいずれかが必要です。"
+        "Windows: Yu Gothic / MS Gothic / Meiryo のいずれか、"
+        "Linux: apt install fonts-noto-cjk が必要です。"
     )
 
 
@@ -146,9 +174,10 @@ def _fit_text(c, text: object, font_name: str, font_size: float, max_width: floa
 
 
 def _draw_fit(c, text: object, x: float, y: float, max_width: float, *, align: str = "left",
-              font_name: str = "JaFont", font_size: float = 8):
-    c.setFont(font_name, font_size)
-    fitted = _fit_text(c, text, font_name, font_size, max_width)
+              font_name: str | None = None, font_size: float = 8):
+    fn = font_name if font_name is not None else _JA_FONT_NAME
+    c.setFont(fn, font_size)
+    fitted = _fit_text(c, text, fn, font_size, max_width)
     if align == "right":
         c.drawRightString(x + max_width, y, fitted)
     elif align == "center":
@@ -198,7 +227,7 @@ def _draw_invoice_section(
 ):
     from reportlab.lib import colors
 
-    c.setFont("JaFont", 20)
+    c.setFont(_JA_FONT_NAME, 20)
     title = "請　求　書" if page_no == 1 else "請　求　書（続き）"
     c.drawCentredString(width / 2, inv_top - 22, title)
 
@@ -224,12 +253,12 @@ def _draw_invoice_section(
     amt_box_x = mg + 70
     amt_box_w = 190
 
-    c.setFont("JaFont", 9)
+    c.setFont(_JA_FONT_NAME, 9)
     c.drawString(mg, amt_box_y + amt_box_h / 2 - 3, "ご請求金額")
     c.setLineWidth(1.0)
     c.rect(amt_box_x, amt_box_y, amt_box_w, amt_box_h)
     _draw_fit(c, f"¥ {total:,}", amt_box_x + 4, amt_box_y + 6, amt_box_w - 8, align="right", font_size=14)
-    c.setFont("JaFont", 10)
+    c.setFont(_JA_FONT_NAME, 10)
     c.drawString(amt_box_x + amt_box_w + 4, amt_box_y + 6, "円")
 
     tbl_top = amt_box_y - 14
@@ -301,7 +330,7 @@ def _draw_invoice_section(
             ("合　計", total, True),
         ]:
             tot_y -= 14
-            c.setFont("JaFont", 9 if bold else 8)
+            c.setFont(_JA_FONT_NAME, 9 if bold else 8)
             c.drawString(tot_x + 4, tot_y + 4, label)
             _draw_fit(c, _currency(val), tot_x + 4, tot_y + 4, tot_w - 8, align="right", font_size=9 if bold else 8)
             c.setLineWidth(0.5 if bold else 0.4)
@@ -327,7 +356,7 @@ def _draw_receipt_section(
     from reportlab.lib import colors
     from reportlab.lib.utils import ImageReader
 
-    c.setFont("JaFont", 20)
+    c.setFont(_JA_FONT_NAME, 20)
     c.drawCentredString(width / 2, rcpt_top - 22, "領　収　証")
 
     rname_y = rcpt_top - 50
@@ -336,12 +365,12 @@ def _draw_receipt_section(
     c.setLineWidth(0.5)
     c.line(mg, rname_y - 4, mg + 250, rname_y - 4)
 
-    c.setFont("JaFont", 15)
+    c.setFont(_JA_FONT_NAME, 15)
     c.drawString(mg, rcpt_top - 74, f"金　¥ {total:,} -")
 
     note_text = receipt_note.strip() if receipt_note else "上記金額正に領収いたしました"
     _draw_fit(c, f"但し　{note_text}", mg, rcpt_top - 96, 285, font_size=9)
-    c.setFont("JaFont", 9)
+    c.setFont(_JA_FONT_NAME, 9)
     c.drawString(mg, rcpt_top - 112, f"{issue_date}　受領")
 
     issuer_lines = [
@@ -400,12 +429,12 @@ def _draw_receipt_section(
 
 
 def _draw_blank_receipt_area(c, *, width: float, mg: float, rcpt_top: float):
-    c.setFont("JaFont", 10)
+    c.setFont(_JA_FONT_NAME, 10)
     c.drawCentredString(width / 2, rcpt_top - 82, "明細は次ページへ続きます")
 
 
 def generate_invoice_receipt_pdf(
-    path: str,
+    path,
     items: list[tuple[str, str, int]],
     issue_date: str,
     recipient: str = "",
@@ -415,6 +444,7 @@ def generate_invoice_receipt_pdf(
     """
     A4縦 請求書（上部）+ 領収証（下部）のPDFを生成する。
 
+    path         : 保存先パス（str）またはファイルオブジェクト（BytesIO等）
     items        : [(品名, 型番/備考, 金額), ...]
     issue_date   : 発行日文字列（例: 2026年5月22日）
     recipient    : 宛先名（空の場合は空欄）

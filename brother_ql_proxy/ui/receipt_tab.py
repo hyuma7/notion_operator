@@ -7,6 +7,7 @@
 """
 
 import os
+import uuid
 import threading
 from datetime import date
 import flet as ft
@@ -368,43 +369,35 @@ class ReceiptTab:
                 text_align=ft.TextAlign.RIGHT if right else ft.TextAlign.LEFT,
             ))
 
-        rows = []
-        subtotal = 0
-        for idx, (pid, data) in enumerate(fetched):
-            props = data.get("properties", {})
-            name_info = props.get("商品名")
-            item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
-            model_info = props.get("型番名")
-            model_number = str(model_info.get("value") or "") if model_info else ""
-            amount_info = props.get("売上金")
-            try:
-                amount = int(amount_info.get("value") or 0) if amount_info else 0
-            except (TypeError, ValueError):
-                amount = 0
-            subtotal += amount
-            rows.append(ft.DataRow(cells=[
-                cell(str(idx + 1)),
-                cell(item_name),
-                cell(model_number),
-                cell("1", right=True),
-                cell(_fmt_currency(amount), right=True),
-            ]))
-
+        items_data = self._extract_items_data(fetched)
+        subtotal = sum(amt for _, _, amt in items_data)
         tax = int(subtotal * 0.1)
         total = subtotal + tax
         today_str = date.today().strftime("%Y年%m月%d日")
         recipient = self._get_recipient()
         receipt_note = self._get_receipt_note()
         issuer = self._get_issuer()
-        page_count = self._invoice_page_count(len(fetched))
+        page_count = self._invoice_page_count(len(items_data))
+
+        rows = []
+        for idx, (item_name, model_number, amount) in enumerate(items_data):
+            rows.append(ft.DataRow(cells=[
+                cell(str(idx + 1)),
+                cell(item_name),
+                cell("1", right=True),
+                cell(_fmt_currency(amount) if amount else "", right=True),
+                cell("10%" if amount else "", right=True),
+                cell(model_number),
+            ]))
 
         item_table = ft.DataTable(
             columns=[
-                ft.DataColumn(ft.Text("No.", style=header_style)),
+                ft.DataColumn(ft.Text("連番", style=header_style)),
                 ft.DataColumn(ft.Text("品名", style=header_style)),
-                ft.DataColumn(ft.Text("型番", style=header_style)),
                 ft.DataColumn(ft.Text("数量", style=header_style), numeric=True),
                 ft.DataColumn(ft.Text("金額", style=header_style), numeric=True),
+                ft.DataColumn(ft.Text("税率", style=header_style), numeric=True),
+                ft.DataColumn(ft.Text("備考", style=header_style)),
             ],
             rows=rows,
             border=ft.border.all(1, ft.Colors.GREY_400),
@@ -512,12 +505,85 @@ class ReceiptTab:
     # PDF出力
     # ─────────────────────────────────────────────────────────────────
 
+    def _extract_items_data(self, fetched: list[tuple[str, dict]]) -> list[tuple[str, str, int]]:
+        result = []
+        for pid, data in fetched:
+            props = data.get("properties", {})
+            name_info = props.get("商品名")
+            item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
+            model_info = props.get("型番名")
+            model_number = str(model_info.get("value") or "") if model_info else ""
+            amount_info = props.get("売上金")
+            try:
+                amount = int(amount_info.get("value") or 0) if amount_info else 0
+            except (TypeError, ValueError):
+                amount = 0
+            result.append((item_name, model_number, amount))
+        return result
+
+    def _export_web(self, today_str: str, fname: str):
+        """Web mode: downloads/に書き出してFletのstatic配信経由でブラウザに開く"""
+        # downloads/ ディレクトリ（main.pyと同じ場所）
+        downloads_dir = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "downloads")
+        )
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        self.export_status.value = "PDF生成中..."
+        self.export_status.color = ft.Colors.BLUE
+        self.export_btn.disabled = True
+        self.page.update()
+
+        def do():
+            try:
+                fetched = self._fetch_selected_data()
+                items_data = self._extract_items_data(fetched)
+
+                # セッション衝突を避けるためユニークなファイル名を使用
+                unique_fname = f"receipt_{uuid.uuid4().hex[:8]}.pdf"
+                out_path = os.path.join(downloads_dir, unique_fname)
+
+                generate_invoice_receipt_pdf(
+                    out_path,
+                    items_data,
+                    today_str,
+                    recipient=self._get_recipient(),
+                    issuer=self._get_issuer(),
+                    receipt_note=self._get_receipt_note(),
+                )
+
+                def on_ok():
+                    self.export_status.value = f"PDFを開きました（ブラウザで保存してください）: {fname}"
+                    self.export_status.color = ft.Colors.GREEN
+                    self.export_btn.disabled = False
+                    # Fletのassets_dirから配信されるURLで開く
+                    self.page.launch_url(f"/{unique_fname}")
+                    self.page.update()
+
+                self.page.run_thread(on_ok)
+            except Exception as ex:
+                err = ex
+
+                def on_err():
+                    self.export_status.value = f"エラー: {err}"
+                    self.export_status.color = ft.Colors.RED
+                    self.export_btn.disabled = False
+                    self.page.update()
+
+                self.page.run_thread(on_err)
+
+        threading.Thread(target=do, daemon=True).start()
+
     def on_export(self, e):
         if not self._selected_items:
             return
 
         today_str = date.today().strftime("%Y年%m月%d日")
         fname = f"請求書_{date.today().strftime('%Y%m%d')}.pdf"
+
+        if getattr(self.page, 'web', False):
+            self._export_web(today_str, fname)
+            return
 
         def save_file(ev: ft.FilePickerResultEvent):
             if not ev.path:
@@ -526,19 +592,7 @@ class ReceiptTab:
             def do():
                 try:
                     fetched = self._fetch_selected_data()
-                    items_data = []
-                    for pid, data in fetched:
-                        props = data.get("properties", {})
-                        name_info = props.get("商品名")
-                        item_name = str(name_info.get("value") or self._selected_items.get(pid, "")) if name_info else self._selected_items.get(pid, "")
-                        model_info = props.get("型番名")
-                        model_number = str(model_info.get("value") or "") if model_info else ""
-                        amount_info = props.get("売上金")
-                        try:
-                            amount = int(amount_info.get("value") or 0) if amount_info else 0
-                        except (TypeError, ValueError):
-                            amount = 0
-                        items_data.append((item_name, model_number, amount))
+                    items_data = self._extract_items_data(fetched)
 
                     generate_invoice_receipt_pdf(
                         ev.path,
