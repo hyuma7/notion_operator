@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "issuer_representative": "代表取締役　齊藤 淳",
     "issuer_address": "〒225-0025 神奈川県横浜市青葉区鉄町25-8",
     "issuer_tel": "TEL：045-507-6784　FAX：045-507-6804",
+    "issuer_invoice_number": "",
     "issuer_stamp_lines": ["株式会社", "アーネスト", "代表取締役", "齊藤 淳"],
     "issuer_stamp_image_path": "",
 }

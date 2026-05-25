@@ -74,6 +74,7 @@ class ExportService:
             APIResponseError: リトライ回数を超えた場合
         """
         retry_delay = self.INITIAL_RETRY_DELAY
+        last_error = None
 
         for attempt in range(self.MAX_RETRIES):
             self._check_cancelled()
@@ -92,6 +93,7 @@ class ExportService:
 
             except APIResponseError as e:
                 if e.status == 429:  # Rate limited
+                    last_error = e
                     # Retry-Afterヘッダーがあれば使用
                     retry_after = getattr(e, 'retry_after', None)
                     wait_time = float(retry_after) if retry_after else retry_delay
@@ -115,7 +117,9 @@ class ExportService:
                     raise
 
         # リトライ回数を超過
-        raise APIResponseError(f"リトライ回数({self.MAX_RETRIES})を超過しました")
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"リトライ回数({self.MAX_RETRIES})を超過しました")
 
     def fetch_sales_data(self, start_date: str, end_date: str) -> List[SoldRecord]:
         """Fetch sold items from Notion within the date range

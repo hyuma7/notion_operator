@@ -87,6 +87,7 @@ def default_issuer_info() -> dict[str, object]:
         "representative": COMPANY_REP,
         "address": COMPANY_ADDRESS,
         "tel": COMPANY_TEL,
+        "invoice_number": "",
         "stamp_lines": STAMP_LINES.copy(),
         "stamp_image_path": "",
     }
@@ -103,6 +104,7 @@ def issuer_info_from_config(config: Mapping | None) -> dict[str, object]:
         "issuer_representative": "representative",
         "issuer_address": "address",
         "issuer_tel": "tel",
+        "issuer_invoice_number": "invoice_number",
         "issuer_stamp_image_path": "stamp_image_path",
     }
     for config_key, issuer_key in key_map.items():
@@ -128,7 +130,7 @@ def _normalize_issuer(issuer: Mapping | None) -> dict[str, object]:
     if not issuer:
         return result
 
-    for key in ["company_name", "representative", "address", "tel", "stamp_image_path"]:
+    for key in ["company_name", "representative", "address", "tel", "invoice_number", "stamp_image_path"]:
         if key in issuer:
             value = issuer.get(key)
             result[key] = "" if value is None else str(value).replace("\n", " ").strip()
@@ -220,6 +222,7 @@ def _draw_invoice_section(
     issue_date: str,
     recipient: str,
     issuer: Mapping,
+    invoice_number: str,
     subtotal: int,
     tax: int,
     total: int,
@@ -236,11 +239,14 @@ def _draw_invoice_section(
         str(issuer.get("address", "")),
         str(issuer.get("tel", "")),
     ]
+    if invoice_number:
+        issuer_lines.append(f"登録番号：{invoice_number}")
     _draw_issuer_lines(c, issuer_lines, width - mg, inv_top - 10, 12, 255, 8.5)
 
-    _draw_fit(c, f"発行日：{issue_date}", width - mg - 150, inv_top - 50, 150, align="right", font_size=8)
+    issue_y = inv_top - (62 if invoice_number else 50)
+    _draw_fit(c, f"発行日：{issue_date}", width - mg - 150, issue_y, 150, align="right", font_size=8)
     if page_count > 1:
-        _draw_fit(c, f"{page_no}/{page_count}ページ", width - mg - 150, inv_top - 64, 150, align="right", font_size=8)
+        _draw_fit(c, f"{page_no}/{page_count}ページ", width - mg - 150, issue_y - 14, 150, align="right", font_size=8)
 
     recip_y = inv_top - 62
     recip_text = f"{recipient}　御中" if recipient else "　　　　　　　　　　　　　御中"
@@ -350,6 +356,7 @@ def _draw_receipt_section(
     issue_date: str,
     recipient: str,
     issuer: Mapping,
+    invoice_number: str,
     total: int,
     receipt_note: str,
 ):
@@ -379,6 +386,8 @@ def _draw_receipt_section(
         str(issuer.get("address", "")),
         str(issuer.get("tel", "")),
     ]
+    if invoice_number:
+        issuer_lines.append(f"登録番号：{invoice_number}")
     _draw_issuer_lines(c, issuer_lines, width - mg, rcpt_top - 52, 13, 265, 8.5)
 
     hanko_cx = mg + 58
@@ -440,6 +449,7 @@ def generate_invoice_receipt_pdf(
     recipient: str = "",
     issuer: Mapping | None = None,
     receipt_note: str = "上記金額正に領収いたしました",
+    invoice_number: str = "",
 ):
     """
     A4縦 請求書（上部）+ 領収証（下部）のPDFを生成する。
@@ -450,6 +460,7 @@ def generate_invoice_receipt_pdf(
     recipient    : 宛先名（空の場合は空欄）
     issuer       : 発行者情報（未指定時は既定値）
     receipt_note : 領収証の但し書き
+    invoice_number : インボイス登録番号（空の場合は issuer から取得）
     """
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
@@ -464,6 +475,7 @@ def generate_invoice_receipt_pdf(
     total = subtotal + tax
     issuer_info = _normalize_issuer(issuer)
     recipient = recipient.strip()
+    invoice_number = (invoice_number or str(issuer_info.get("invoice_number", ""))).strip()
 
     c = canvas.Canvas(path, pagesize=A4)
     c.setTitle("請求書・領収証")
@@ -496,6 +508,7 @@ def generate_invoice_receipt_pdf(
             issue_date=issue_date,
             recipient=recipient,
             issuer=issuer_info,
+            invoice_number=invoice_number,
             subtotal=subtotal,
             tax=tax,
             total=total,
@@ -511,6 +524,7 @@ def generate_invoice_receipt_pdf(
                 issue_date=issue_date,
                 recipient=recipient,
                 issuer=issuer_info,
+                invoice_number=invoice_number,
                 total=total,
                 receipt_note=receipt_note,
             )

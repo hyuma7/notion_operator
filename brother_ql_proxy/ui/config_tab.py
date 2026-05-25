@@ -91,6 +91,14 @@ class ConfigTab:
             dense=True,
         )
 
+        self.issuer_invoice_number_field = ft.TextField(
+            label="インボイス番号",
+            hint_text="例: T1234567890123",
+            value=proxy.config.get('issuer_invoice_number', ''),
+            width=300,
+            dense=True,
+        )
+
         self.issuer_stamp_lines_field = ft.TextField(
             label="印影の文字（1行ずつ）",
             value=stamp_text,
@@ -128,6 +136,9 @@ class ConfigTab:
             self.proxy.config['issuer_representative'] = (self.issuer_representative_field.value or "").strip()
             self.proxy.config['issuer_address'] = (self.issuer_address_field.value or "").strip()
             self.proxy.config['issuer_tel'] = (self.issuer_tel_field.value or "").strip()
+            self.proxy.config['issuer_invoice_number'] = (
+                self.issuer_invoice_number_field.value or ""
+            ).strip()
             self.proxy.config['issuer_stamp_lines'] = [
                 line.strip()
                 for line in (self.issuer_stamp_lines_field.value or "").splitlines()
@@ -203,6 +214,7 @@ class ConfigTab:
                                 self.issuer_representative_field,
                                 self.issuer_address_field,
                                 self.issuer_tel_field,
+                                self.issuer_invoice_number_field,
                                 ft.Divider(height=4),
                                 self.issuer_stamp_lines_field,
                                 self.issuer_stamp_image_path_field,

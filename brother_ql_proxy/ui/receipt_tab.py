@@ -9,7 +9,7 @@
 import os
 import uuid
 import threading
-from datetime import date
+from datetime import date, datetime
 import flet as ft
 
 from notion.fetch_page import fetch_recent_items, search_items, fetch_all_properties
@@ -86,6 +86,13 @@ class ReceiptTab:
             dense=True,
             expand=True,
         )
+        self.issue_date_field = ft.TextField(
+            label="発行日",
+            hint_text="YYYY-MM-DD",
+            value=date.today().strftime("%Y-%m-%d"),
+            dense=True,
+            width=150,
+        )
         self.receipt_note_field = ft.TextField(
             label="但し書き",
             value="上記金額正に領収いたしました",
@@ -143,7 +150,11 @@ class ReceiptTab:
                 ft.Container(
                     content=ft.Column([
                         ft.Text("発行内容", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Row([self.recipient_field, self.receipt_note_field], spacing=10),
+                        ft.Row(
+                            [self.recipient_field, self.issue_date_field],
+                            spacing=10,
+                        ),
+                        self.receipt_note_field,
                     ], spacing=8),
                     border=ft.border.all(1, ft.Colors.BLUE_GREY_100),
                     border_radius=6,
@@ -309,6 +320,26 @@ class ReceiptTab:
     def _get_receipt_note(self) -> str:
         return (self.receipt_note_field.value or "").strip() or "上記金額正に領収いたしました"
 
+    def _get_issue_date(self) -> str:
+        raw = (self.issue_date_field.value or "").strip()
+        if not raw:
+            return date.today().strftime("%Y年%m月%d日")
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(raw, fmt).strftime("%Y年%m月%d日")
+            except ValueError:
+                pass
+        return raw
+
+    def _get_issue_date_filename(self) -> str:
+        raw = (self.issue_date_field.value or "").strip()
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(raw, fmt).strftime("%Y%m%d")
+            except ValueError:
+                pass
+        return date.today().strftime("%Y%m%d")
+
     def _get_issuer(self) -> dict[str, object]:
         return issuer_info_from_config(self.proxy.config)
 
@@ -373,10 +404,11 @@ class ReceiptTab:
         subtotal = sum(amt for _, _, amt in items_data)
         tax = int(subtotal * 0.1)
         total = subtotal + tax
-        today_str = date.today().strftime("%Y年%m月%d日")
+        issue_date = self._get_issue_date()
         recipient = self._get_recipient()
         receipt_note = self._get_receipt_note()
         issuer = self._get_issuer()
+        invoice_number = str(issuer.get("invoice_number", "") or "").strip()
         page_count = self._invoice_page_count(len(items_data))
 
         rows = []
@@ -460,12 +492,17 @@ class ReceiptTab:
         )
 
         # 発行者情報ブロック（右寄り）
-        issuer_block = ft.Column([
+        issuer_lines = [
             ft.Text(str(issuer.get("company_name", "")), size=10),
             ft.Text(str(issuer.get("representative", "")), size=10),
             ft.Text(str(issuer.get("address", "")), size=9, color=ft.Colors.GREY_700),
             ft.Text(str(issuer.get("tel", "")), size=9, color=ft.Colors.GREY_700),
-        ], spacing=2)
+        ]
+        if invoice_number:
+            issuer_lines.append(
+                ft.Text(f"登録番号：{invoice_number}", size=9, color=ft.Colors.GREY_700)
+            )
+        issuer_block = ft.Column(issuer_lines, spacing=2)
 
         self.preview_column.controls = [
             ft.Container(
@@ -474,7 +511,7 @@ class ReceiptTab:
                             text_align=ft.TextAlign.CENTER),
                     ft.Row([
                         ft.Text(f"{recipient or '　　　　　　　　　'}　御中", size=12, expand=True),
-                        ft.Text(f"発行日：{today_str}", size=10),
+                        ft.Text(f"発行日：{issue_date}", size=10),
                     ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                     ft.Text(f"PDF {page_count}ページ", size=10, color=ft.Colors.BLUE_GREY_500),
                     ft.Divider(height=4),
@@ -521,7 +558,7 @@ class ReceiptTab:
             result.append((item_name, model_number, amount))
         return result
 
-    def _export_web(self, today_str: str, fname: str):
+    def _export_web(self, issue_date: str, fname: str):
         """Web mode: downloads/に書き出してFletのstatic配信経由でブラウザに開く"""
         # downloads/ ディレクトリ（main.pyと同じ場所）
         downloads_dir = os.path.normpath(
@@ -546,7 +583,7 @@ class ReceiptTab:
                 generate_invoice_receipt_pdf(
                     out_path,
                     items_data,
-                    today_str,
+                    issue_date,
                     recipient=self._get_recipient(),
                     issuer=self._get_issuer(),
                     receipt_note=self._get_receipt_note(),
@@ -578,11 +615,11 @@ class ReceiptTab:
         if not self._selected_items:
             return
 
-        today_str = date.today().strftime("%Y年%m月%d日")
-        fname = f"請求書_{date.today().strftime('%Y%m%d')}.pdf"
+        issue_date = self._get_issue_date()
+        fname = f"請求書_{self._get_issue_date_filename()}.pdf"
 
         if getattr(self.page, 'web', False):
-            self._export_web(today_str, fname)
+            self._export_web(issue_date, fname)
             return
 
         def save_file(ev: ft.FilePickerResultEvent):
@@ -597,7 +634,7 @@ class ReceiptTab:
                     generate_invoice_receipt_pdf(
                         ev.path,
                         items_data,
-                        today_str,
+                        issue_date,
                         recipient=self._get_recipient(),
                         issuer=self._get_issuer(),
                         receipt_note=self._get_receipt_note(),

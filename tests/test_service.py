@@ -24,12 +24,12 @@ class TestRateLimitRetry:
         """正常なクエリはリトライなしで成功"""
         mock_result = {"results": [{"id": "1"}], "has_more": False}
         self.service.notion = Mock()
-        self.service.notion.databases.query.return_value = mock_result
+        self.service.notion.request.return_value = mock_result
 
         result = self.service._query_with_retry({"database_id": "test"})
 
         assert result == mock_result
-        assert self.service.notion.databases.query.call_count == 1
+        assert self.service.notion.request.call_count == 1
 
     def test_retry_on_429_error(self):
         """429エラー時にリトライする"""
@@ -44,7 +44,7 @@ class TestRateLimitRetry:
         mock_result = {"results": [], "has_more": False}
 
         self.service.notion = Mock()
-        self.service.notion.databases.query.side_effect = [error_429, mock_result]
+        self.service.notion.request.side_effect = [error_429, mock_result]
 
         # 待機時間を短縮
         self.service.INITIAL_RETRY_DELAY = 0.1
@@ -53,7 +53,7 @@ class TestRateLimitRetry:
         result = self.service._query_with_retry({"database_id": "test"})
 
         assert result == mock_result
-        assert self.service.notion.databases.query.call_count == 2
+        assert self.service.notion.request.call_count == 2
 
     def test_cancel_during_retry_wait(self):
         """リトライ待機中にキャンセル可能"""
@@ -65,7 +65,7 @@ class TestRateLimitRetry:
         error_429.status = 429
 
         self.service.notion = Mock()
-        self.service.notion.databases.query.side_effect = error_429
+        self.service.notion.request.side_effect = error_429
 
         self.service.INITIAL_RETRY_DELAY = 0.1
         self.service.REQUEST_DELAY = 0.01
@@ -91,7 +91,7 @@ class TestRateLimitRetry:
 
         mock_result = {"results": [{"id": "1"}], "has_more": False}
         self.service.notion = Mock()
-        self.service.notion.databases.query.return_value = mock_result
+        self.service.notion.request.return_value = mock_result
         self.service.REQUEST_DELAY = 0.01
 
         # fetch_sales_dataを実行（モックで簡略化）
@@ -109,7 +109,7 @@ class TestRateLimitRetry:
         error_429.status = 429
 
         self.service.notion = Mock()
-        self.service.notion.databases.query.side_effect = error_429
+        self.service.notion.request.side_effect = error_429
 
         self.service.MAX_RETRIES = 2
         self.service.INITIAL_RETRY_DELAY = 0.01
@@ -118,7 +118,7 @@ class TestRateLimitRetry:
         with pytest.raises(APIResponseError):
             self.service._query_with_retry({"database_id": "test"})
 
-        assert self.service.notion.databases.query.call_count == 2
+        assert self.service.notion.request.call_count == 2
 
     def test_non_429_error_not_retried(self):
         """429以外のエラーはリトライしない"""
@@ -130,13 +130,13 @@ class TestRateLimitRetry:
         error_500.status = 500
 
         self.service.notion = Mock()
-        self.service.notion.databases.query.side_effect = error_500
+        self.service.notion.request.side_effect = error_500
 
         with pytest.raises(APIResponseError):
             self.service._query_with_retry({"database_id": "test"})
 
         # 1回だけ呼ばれる（リトライなし）
-        assert self.service.notion.databases.query.call_count == 1
+        assert self.service.notion.request.call_count == 1
 
 
 class TestCancelFunctionality:
