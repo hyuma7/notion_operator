@@ -38,6 +38,14 @@ def _ensure_ja_font():
         "C:/Windows/Fonts/YuGothR.ttc",
         "C:/Windows/Fonts/msgothic.ttc",
         "C:/Windows/Fonts/meiryo.ttc",
+        # macOS (ヒラギノ角ゴシック – macOS 標準搭載)
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W5.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W7.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴ ProN W3.ttc",
+        "/Library/Fonts/ヒラギノ角ゴ ProN W3.ttc",
+        # macOS (Noto Sans CJK – ユーザーインストール)
+        "/Library/Fonts/NotoSansCJK-Regular.ttc",
         # Linux (Noto CJK – fonts-noto-cjk パッケージ)
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.ttc",
@@ -48,6 +56,13 @@ def _ensure_ja_font():
         "/usr/share/fonts/truetype/takao-gothic/TakaoGothic.ttf",
     ]
     # インストール場所がバージョンにより異なるためglobで補完
+    # macOS: ヒラギノ・Noto CJK を選択的に探す
+    candidates += glob.glob("/System/Library/Fonts/**/ヒラギノ*.ttc", recursive=True)
+    candidates += glob.glob("/System/Library/Fonts/**/Hiragino*.ttc", recursive=True)
+    candidates += glob.glob("/Library/Fonts/**/ヒラギノ*.ttc", recursive=True)
+    candidates += glob.glob(os.path.expanduser("~/Library/Fonts/**/ヒラギノ*.ttc"), recursive=True)
+    candidates += glob.glob("/Library/Fonts/**/Noto*CJK*.ttc", recursive=True)
+    candidates += glob.glob(os.path.expanduser("~/Library/Fonts/**/Noto*CJK*.ttc"), recursive=True)
     candidates += glob.glob("/usr/share/fonts/**/Noto*CJK*Regular*.ttc", recursive=True)
     candidates += glob.glob("/usr/share/fonts/**/Noto*CJK*Regular*.otf", recursive=True)
     candidates += glob.glob("/usr/share/fonts/**/ipag*.ttf", recursive=True)
