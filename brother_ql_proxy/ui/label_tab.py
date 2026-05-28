@@ -12,8 +12,18 @@ from notion.fetch_page import fetch_recent_items, search_items, fetch_all_proper
 from brother_ql_proxy.notion import LabelPreviewGenerator
 from brother_ql_proxy.utils import convert_to_brother_format
 
-# ラベルに出力するフィールド（順番通り）
-LABEL_FIELDS = ["商品名", "ID", "型番名", "年式", "売上金"]
+# ラベルに出力するフィールド定義（修正点その2）
+# ペア: 同じ行に「左値 : 右値」で表示
+#   ((notion_prop_left, notion_prop_right), (display_left, display_right))
+LABEL_PAIR_FIELDS = [
+    (("メーカー", "型番名 "),   ("メーカー", "型番")),
+    (("仕入れ先名", "仕入れ日"), ("仕入先",  "仕入れ日")),
+]
+# 単独行
+#   (notion_prop, display_label)
+LABEL_SINGLE_FIELDS = [
+    ("販売担当者", "販売担当者"),
+]
 
 
 class LabelTab:
@@ -311,29 +321,70 @@ class LabelTab:
     def _render_fields(self, data: dict):
         self.fields_column.controls.clear()
         props = data.get("properties", {})
-        for name in LABEL_FIELDS:
-            info = props.get(name)
-            value = info.get("value") if info else None
-            display = self._fmt(value) if value is not None else "—"
-            self.fields_column.controls.append(
-                ft.Container(
-                    content=ft.Row([
-                        ft.Text(name, size=13, weight=ft.FontWeight.BOLD, width=100),
-                        ft.Text(display, size=13, expand=True,
-                                max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                    ]),
-                    padding=ft.padding.symmetric(horizontal=8, vertical=3),
-                    bgcolor=ft.Colors.GREY_100,
-                    border_radius=4,
-                )
-            )
 
-    def _fmt(self, value) -> str:
+        for (nf_l, nf_r), (dl, dr) in LABEL_PAIR_FIELDS:
+            v_l = self._get_value(props, nf_l)
+            v_r = self._get_value(props, nf_r)
+            text = f"{dl}: {v_l or '—'}  /  {dr}: {v_r or '—'}"
+            self.fields_column.controls.append(self._field_row(text))
+
+        for nf, display in LABEL_SINGLE_FIELDS:
+            v = self._get_value(props, nf)
+            text = f"{display}: {v or '—'}"
+            self.fields_column.controls.append(self._field_row(text))
+
+    def _field_row(self, text: str) -> ft.Container:
+        return ft.Container(
+            content=ft.Text(text, size=13, expand=True,
+                            max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+            padding=ft.padding.symmetric(horizontal=8, vertical=3),
+            bgcolor=ft.Colors.GREY_100,
+            border_radius=4,
+        )
+
+    def _get_value(self, props: dict, name: str) -> str:
+        info = props.get(name)
+        if not info:
+            return ""
+        return self._fmt(info.get("value"), info.get("type", ""))
+
+    def _fmt(self, value, prop_type: str = "") -> str:
+        if value is None:
+            return ""
+        if prop_type == "date" or (isinstance(value, dict) and "start" in value):
+            return value.get("start", "") or ""
         if isinstance(value, list):
-            return ", ".join(str(v) for v in value)
+            parts = []
+            for v in value:
+                if v is None:
+                    continue
+                if isinstance(v, dict) and "start" in v:
+                    parts.append(v.get("start", "") or "")
+                elif isinstance(v, (list, dict)):
+                    s = self._fmt(v)
+                    if s:
+                        parts.append(s)
+                else:
+                    parts.append(str(v))
+            return ", ".join(parts)
         if isinstance(value, dict):
-            return ", ".join(f"{k}: {v}" for k, v in value.items() if v is not None)
+            return ", ".join(str(v) for v in value.values() if v is not None)
         return str(value)
+
+    def _build_printable_fields(self, props: dict) -> list:
+        """印刷・プレビュー用フィールドリストを構築"""
+        fields = []
+        for (nf_l, nf_r), (dl, dr) in LABEL_PAIR_FIELDS:
+            v_l = self._get_value(props, nf_l)
+            v_r = self._get_value(props, nf_r)
+            if v_l or v_r:
+                combined = f"{v_l}  :  {v_r}" if (v_l and v_r) else (v_l or v_r)
+                fields.append({"name": f"{dl} / {dr}", "value": combined, "type": "combined"})
+        for nf, display in LABEL_SINGLE_FIELDS:
+            v = self._get_value(props, nf)
+            if v:
+                fields.append({"name": display, "value": v, "type": "people"})
+        return fields
 
     # ─────────────────────────────────────────────────────────────────
     # 印刷
@@ -350,16 +401,7 @@ class LabelTab:
         def do():
             try:
                 props = self._page_data.get("properties", {})
-                printable_fields = []
-                for name in LABEL_FIELDS:
-                    info = props.get(name)
-                    value = info.get("value") if info else None
-                    if value is not None and value != "" and value != [] and value != {}:
-                        printable_fields.append({
-                            "name": name,
-                            "value": self._fmt(value),
-                            "type": info.get("type", ""),
-                        })
+                printable_fields = self._build_printable_fields(props)
 
                 page_url = self._page_data.get("url", "")
                 page_id = self._page_data.get("page_id", "")
@@ -379,6 +421,7 @@ class LabelTab:
                     qr_data=qr_data,
                     font_size=int(self.font_size_slider.value),
                     qr_size_scale=int(self.qr_size_slider.value),
+                    auto_extend_height=False,
                 )
                 raster = convert_to_brother_format(img, label_size)
                 success = self.proxy.send_raw_data_to_printer(raster)
@@ -438,16 +481,7 @@ class LabelTab:
         def do():
             try:
                 props = self._page_data.get("properties", {})
-                printable_fields = []
-                for name in LABEL_FIELDS:
-                    info = props.get(name)
-                    value = info.get("value") if info else None
-                    if value is not None and value != "" and value != [] and value != {}:
-                        printable_fields.append({
-                            "name": name,
-                            "value": self._fmt(value),
-                            "type": info.get("type", ""),
-                        })
+                printable_fields = self._build_printable_fields(props)
 
                 page_url = self._page_data.get("url", "")
                 page_id = self._page_data.get("page_id", "")
@@ -467,6 +501,7 @@ class LabelTab:
                     qr_data=qr_data,
                     font_size=font_size,
                     qr_size_scale=int(self.qr_size_slider.value),
+                    auto_extend_height=False,
                 )
 
                 def on_ok():
