@@ -18,30 +18,49 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from notion_client import Client
 
+try:
+    from brother_ql_proxy.core.config import CONFIG_FILE, LEGACY_CONFIG_FILES
+except Exception:
+    CONFIG_FILE = "printer_proxy_config.json"
+    LEGACY_CONFIG_FILES = ()
+
 load_dotenv()
-
-_CONFIG_FILE = "printer_proxy_config.json"
-
 
 _NOTION_VERSION = "2022-06-28"
 
 
+def _iter_config_files() -> tuple[str, ...]:
+    candidates = [CONFIG_FILE, *LEGACY_CONFIG_FILES, "printer_proxy_config.json"]
+    seen = set()
+    result = []
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        result.append(path)
+    return tuple(result)
+
+
+def _get_config_value(key: str) -> str:
+    for path in _iter_config_files():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                value = json.load(f).get(key)
+            if value:
+                return str(value).strip()
+        except Exception:
+            continue
+    return ""
+
+
 def _get_api_key() -> str:
     """設定ファイル → 環境変数の優先順位でAPIキーを返す"""
-    try:
-        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f).get("notion_api_key") or os.getenv("NOTION_API_KEY") or ""
-    except Exception:
-        return os.getenv("NOTION_API_KEY") or ""
+    return _get_config_value("notion_api_key") or os.getenv("NOTION_API_KEY", "").strip()
 
 
 def _get_database_id() -> str:
     """設定ファイル → 環境変数の優先順位でDatabase IDを返す"""
-    try:
-        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f).get("notion_database_id") or os.getenv("NOTION_DATABASE_ID") or ""
-    except Exception:
-        return os.getenv("NOTION_DATABASE_ID") or ""
+    return _get_config_value("notion_database_id") or os.getenv("NOTION_DATABASE_ID", "").strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

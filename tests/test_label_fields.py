@@ -8,6 +8,7 @@ label_tab.py の _fmt / _get_value / _build_printable_fields を検証する。
   - 型番名      : rollup > array > title
   - 仕入先      : rollup > array > formula(string)
   - 仕入れ日   : date
+  - 製番        : rich_text
   - 販売担当者  : rollup > array > formula(string)
 
 統合テスト:
@@ -103,6 +104,10 @@ def people_val(names: list) -> dict:
     return {"type": "people", "value": names}
 
 
+def rich_text_val(value: str) -> dict:
+    return {"type": "rich_text", "value": value}
+
+
 # ─────────────────────────────────────────────
 # 1. _fmt 単体テスト
 # ─────────────────────────────────────────────
@@ -166,6 +171,10 @@ class TestGetValue:
         props = {"販売担当者": rollup_formula_str("齊藤光")}
         assert helper._get_value(props, "販売担当者") == "齊藤光"
 
+    def test_製番_rich_textから取得(self, helper):
+        props = {"製番": rich_text_val("SN-12345")}
+        assert helper._get_value(props, "製番") == "SN-12345"
+
     def test_存在しないフィールドは空文字(self, helper):
         assert helper._get_value({}, "型番名") == ""
 
@@ -185,12 +194,13 @@ class TestBuildPrintableFields:
             "型番名 ":     rollup_title("4T-C50EJ1"),   # Notion側にスペースあり
             "仕入れ先名":  rollup_formula_str("RE"),
             "仕入れ日":   date_val("2024-03-15"),
+            "製番":       rich_text_val("SN-12345"),
             "販売担当者":  rollup_formula_str("齊藤光"),
         }
 
     def test_全フィールドが揃う場合(self, helper):
         fields = helper._build_printable_fields(self._full_props())
-        assert len(fields) == 3
+        assert len(fields) == 4
 
         assert fields[0]["name"] == "メーカー / 型番"
         assert fields[0]["value"] == "SHARP  :  4T-C50EJ1"
@@ -198,8 +208,11 @@ class TestBuildPrintableFields:
         assert fields[1]["name"] == "仕入先 / 仕入れ日"
         assert fields[1]["value"] == "RE  :  2024-03-15"
 
-        assert fields[2]["name"] == "販売担当者"
-        assert fields[2]["value"] == "齊藤光"
+        assert fields[2]["name"] == "製番"
+        assert fields[2]["value"] == "SN-12345"
+
+        assert fields[3]["name"] == "販売担当者"
+        assert fields[3]["value"] == "齊藤光"
 
     def test_型番名が空でもメーカーだけ表示(self, helper):
         props = self._full_props()
@@ -221,6 +234,7 @@ class TestBuildPrintableFields:
             "型番名 ":    {"type": "rollup", "value": []},
             "仕入れ先名": {"type": "rollup", "value": []},
             "仕入れ日":  {"type": "date", "value": None},
+            "製番":      {"type": "rich_text", "value": ""},
             "販売担当者": {"type": "rollup", "value": []},
         }
         fields = helper._build_printable_fields(props)
@@ -238,7 +252,7 @@ class TestLabelFieldsIntegration:
     実行: pytest -v -m integration tests/test_label_fields.py
     """
     PAGE_URL = "https://www.notion.so/4K-VIERA-36054e6206d881ffa92bf7af5123c15f"
-    EXPECTED_FIELDS = ["メーカー", "型番名 ", "仕入れ先名", "仕入れ日", "販売担当者"]
+    EXPECTED_FIELDS = ["メーカー", "型番名 ", "仕入れ先名", "仕入れ日", "製番", "販売担当者"]
 
     @pytest.fixture(autouse=True)
     def fetch_page(self):
@@ -271,6 +285,10 @@ class TestLabelFieldsIntegration:
     def test_販売担当者フィールドが存在する(self):
         assert "販売担当者" in self.props, \
             f"販売担当者 が見つからない。利用可能なフィールド: {list(self.props.keys())}"
+
+    def test_製番フィールドが存在する(self):
+        assert "製番" in self.props, \
+            f"製番 が見つからない。利用可能なフィールド: {list(self.props.keys())}"
 
     def test_販売担当者がrollupで取得できる(self):
         info = self.props.get("販売担当者")

@@ -6,11 +6,22 @@ import unittest
 import pandas as pd
 import sys
 import os
+import tempfile
+from datetime import datetime
+from unittest.mock import patch
 
 # プロジェクトのルートディレクトリをパスに追加
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from brother_ql_proxy.ui.export.ui import ExportTab
+from brother_ql_proxy.ui.export.ui import (
+    ExportTab,
+    _build_daily_excel_filename,
+)
+from brother_ql_proxy.ui.file_save import (
+    set_saved_file_status,
+    should_save_directly,
+    unique_file_path,
+)
 
 
 class TestExportTab(unittest.TestCase):
@@ -249,6 +260,124 @@ class TestDataIntegration(unittest.TestCase):
         self.assertIn('メルカリ1', all_companies, "メルカリ1が含まれていません")
         self.assertNotIn('不明', all_companies, "不明が除外されていません")
         self.assertEqual(len(all_companies), 5, "企業数が正しくありません")
+
+
+class TestDailyExcelExport(unittest.TestCase):
+    """日別Excel保存のテストケース"""
+
+    def test_build_daily_excel_filename(self):
+        same_day = datetime(2026, 6, 1)
+        self.assertEqual(
+            _build_daily_excel_filename(same_day, same_day),
+            "日別売上_2026-06-01.xlsx",
+        )
+
+        self.assertEqual(
+            _build_daily_excel_filename(datetime(2026, 6, 1), datetime(2026, 6, 30)),
+            "日別売上_2026-06-01_2026-06-30.xlsx",
+        )
+
+    def test_unique_file_path_adds_suffix(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            open(os.path.join(tmpdir, "日別売上_2026-06-01.xlsx"), "w").close()
+            open(os.path.join(tmpdir, "日別売上_2026-06-01_2.xlsx"), "w").close()
+
+            self.assertEqual(
+                unique_file_path(tmpdir, "日別売上_2026-06-01.xlsx"),
+                os.path.join(tmpdir, "日別売上_2026-06-01_3.xlsx"),
+            )
+
+    def test_saved_file_status_opens_folder_on_click(self):
+        class FakeText:
+            def __init__(self):
+                self.value = ""
+                self.color = None
+                self.tooltip = None
+                self.on_tap = None
+                self.spans = None
+
+        class FakePage:
+            def __init__(self):
+                self.snack_bar = None
+                self.update_count = 0
+
+            def update(self):
+                self.update_count += 1
+
+        text = FakeText()
+        page = FakePage()
+
+        with patch("brother_ql_proxy.ui.file_save.open_containing_folder") as open_folder:
+            set_saved_file_status(text, page, "/tmp/report.xlsx")
+            text.spans[0].on_click(None)
+
+        self.assertIn("ファイルを保存しました。", text.value)
+        open_folder.assert_called_once_with("/tmp/report.xlsx")
+        self.assertIsNone(text.on_tap)
+
+    def test_should_save_directly_by_platform(self):
+        class FakePage:
+            def __init__(self, web=False):
+                self.web = web
+
+        with patch("brother_ql_proxy.ui.file_save.platform.system", return_value="Darwin"):
+            self.assertTrue(should_save_directly(FakePage(web=False)))
+            self.assertFalse(should_save_directly(FakePage(web=True)))
+
+        with patch("brother_ql_proxy.ui.file_save.platform.system", return_value="Windows"):
+            self.assertFalse(should_save_directly(FakePage(web=False)))
+
+    def test_export_daily_excel_saves_directly_on_macos(self):
+        class FakeText:
+            def __init__(self):
+                self.value = ""
+                self.color = None
+                self.tooltip = None
+                self.on_tap = None
+                self.spans = None
+
+        class FakePage:
+            def __init__(self):
+                self.web = False
+                self.overlay = []
+                self.snack_bar = None
+                self.update_count = 0
+
+            def update(self):
+                self.update_count += 1
+
+        class FakeService:
+            def __init__(self):
+                self.calls = []
+
+            def generate_daily_excel(self, path, sales, purchases):
+                self.calls.append((path, sales, purchases))
+                with open(path, "wb") as f:
+                    f.write(b"excel")
+
+        page = FakePage()
+        service = FakeService()
+        tab = ExportTab.__new__(ExportTab)
+        tab.page = page
+        tab.service = service
+        tab.daily_start_date = datetime(2026, 6, 1)
+        tab.daily_end_date = datetime(2026, 6, 1)
+        tab.daily_sales_cache = [{"id": "sale-1"}]
+        tab.daily_purchases_cache = []
+        tab.daily_result_text = FakeText()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("brother_ql_proxy.ui.file_save.platform.system", return_value="Darwin"):
+                with patch("brother_ql_proxy.ui.file_save.os.path.expanduser", return_value=tmpdir):
+                    tab.export_daily_excel(None)
+
+            expected_path = os.path.join(tmpdir, "日別売上_2026-06-01.xlsx")
+            self.assertEqual(service.calls, [(expected_path, [{"id": "sale-1"}], [])])
+            self.assertTrue(os.path.exists(expected_path))
+            self.assertEqual(page.overlay, [])
+            self.assertIsNotNone(page.snack_bar)
+            self.assertIn("ファイルを保存しました。", tab.daily_result_text.value)
+            self.assertIsNotNone(tab.daily_result_text.spans)
 
 
 if __name__ == '__main__':
