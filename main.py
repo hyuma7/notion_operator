@@ -12,17 +12,27 @@ DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downlo
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 
-def _create_startup_error_tab(message: str, details: str) -> ft.Tab:
+def _create_startup_error_tab(page: ft.Page, message: str, details: str) -> ft.Tab:
+    # 起動に失敗した状態こそ修正版への更新が必要なので、
+    # 設定タブが出せないときはここにアップデートカードを置く
+    controls = [
+        ft.Text(message, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
+    ]
+    try:
+        from updater.ui import get_update_section
+
+        controls.append(get_update_section(page).create_card())
+    except Exception as ex:
+        print(f"[WARN] アップデートカードの作成に失敗しました: {ex}")
+    controls.append(ft.Text(details, selectable=True))
+
     return ft.Tab(
         text="起動エラー",
         icon=ft.Icons.ERROR_OUTLINE,
         content=ft.Container(
             padding=ft.padding.all(20),
             content=ft.Column(
-                [
-                    ft.Text(message, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED),
-                    ft.Text(details, selectable=True),
-                ],
+                controls,
                 scroll=ft.ScrollMode.AUTO,
             ),
         ),
@@ -54,6 +64,7 @@ def _try_load_proxy_tabs(proxy, page) -> dict:
         print(f"[WARN] プリンタープロキシのロードに失敗しました: {ex}\n{details}")
         return {
             "error": _create_startup_error_tab(
+                page,
                 "プリンタープロキシのロードに失敗しました",
                 details,
             )
@@ -79,6 +90,7 @@ def main(page: ft.Page):
         print(f"[WARN] プリンタープロキシの初期化に失敗しました: {ex}\n{details}")
         proxy_tabs = {
             "error": _create_startup_error_tab(
+                page,
                 "プリンタープロキシの初期化に失敗しました",
                 details,
             )
