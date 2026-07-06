@@ -22,6 +22,7 @@ LABEL_PAIR_FIELDS = [
 # 単独行
 #   (notion_prop, display_label)
 LABEL_SINGLE_FIELDS = [
+    ("製番", "製番"),
     ("販売担当者", "販売担当者"),
 ]
 
@@ -196,6 +197,10 @@ class LabelTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_refresh(self, e):
+        api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
+        if not api_key:
+            self._snack("Notion API Key が未設定です（設定タブで設定してください）", ft.Colors.RED)
+            return
         db_id = self.proxy.config.get("notion_database_id", "")
         if not db_id:
             self._snack("Notion Database ID が未設定です（設定タブで設定してください）", ft.Colors.RED)
@@ -208,6 +213,10 @@ class LabelTab:
         query = self.search_field.value.strip()
         if not query:
             self._snack("検索ワードを入力してください", ft.Colors.ORANGE)
+            return
+        api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
+        if not api_key:
+            self._snack("Notion API Key が未設定です（設定タブで設定してください）", ft.Colors.RED)
             return
         db_id = self.proxy.config.get("notion_database_id", "")
         if not db_id:

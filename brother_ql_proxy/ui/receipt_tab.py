@@ -7,13 +7,18 @@
 """
 
 import os
-import platform
 import uuid
 import threading
 from datetime import date, datetime
 import flet as ft
 
 from notion.fetch_page import fetch_recent_items, search_items, fetch_all_properties
+from .file_save import (
+    clear_saved_file_status_action,
+    save_file_for_platform,
+    set_saved_file_status,
+    should_save_directly,
+)
 from .export.pdf_service import (
     generate_invoice_receipt_pdf,
     issuer_info_from_config,
@@ -182,6 +187,10 @@ class ReceiptTab:
     # ─────────────────────────────────────────────────────────────────
 
     def on_refresh(self, e):
+        api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
+        if not api_key:
+            self._snack("Notion API Key が未設定です（設定タブで設定してください）", ft.Colors.RED)
+            return
         db_id = self.proxy.config.get("notion_database_id", "")
         if not db_id:
             self._snack("Notion Database ID が未設定です（設定タブで設定してください）", ft.Colors.RED)
@@ -194,6 +203,10 @@ class ReceiptTab:
         query = self.search_field.value.strip()
         if not query:
             self._snack("検索ワードを入力してください", ft.Colors.ORANGE)
+            return
+        api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
+        if not api_key:
+            self._snack("Notion API Key が未設定です（設定タブで設定してください）", ft.Colors.RED)
             return
         db_id = self.proxy.config.get("notion_database_id", "")
         if not db_id:
@@ -567,6 +580,7 @@ class ReceiptTab:
         )
         os.makedirs(downloads_dir, exist_ok=True)
 
+        clear_saved_file_status_action(self.export_status)
         self.export_status.value = "PDF生成中..."
         self.export_status.color = ft.Colors.BLUE
         self.export_btn.disabled = True
@@ -591,6 +605,7 @@ class ReceiptTab:
                 )
 
                 def on_ok():
+                    clear_saved_file_status_action(self.export_status)
                     self.export_status.value = f"PDFを開きました（ブラウザで保存してください）: {fname}"
                     self.export_status.color = ft.Colors.GREEN
                     self.export_btn.disabled = False
@@ -603,6 +618,7 @@ class ReceiptTab:
                 err = ex
 
                 def on_err():
+                    clear_saved_file_status_action(self.export_status)
                     self.export_status.value = f"エラー: {err}"
                     self.export_status.color = ft.Colors.RED
                     self.export_btn.disabled = False
@@ -623,75 +639,64 @@ class ReceiptTab:
             self._export_web(issue_date, fname)
             return
 
-        if platform.system() == "Darwin":
-            # Mac: ダイアログなしで ~/Downloads/ に直接保存
-            downloads_dir = os.path.expanduser("~/Downloads")
-            os.makedirs(downloads_dir, exist_ok=True)
-            out_path = os.path.join(downloads_dir, fname)
+        direct_save = should_save_directly(self.page)
 
+        def set_generating():
+            clear_saved_file_status_action(self.export_status)
             self.export_status.value = "PDF生成中..."
             self.export_status.color = ft.Colors.BLUE
             self.export_btn.disabled = True
             self.page.update()
 
-            def do_mac():
-                try:
-                    fetched = self._fetch_selected_data()
-                    items_data = self._extract_items_data(fetched)
-                    generate_invoice_receipt_pdf(
-                        out_path,
-                        items_data,
-                        issue_date,
-                        recipient=self._get_recipient(),
-                        issuer=self._get_issuer(),
-                        receipt_note=self._get_receipt_note(),
-                    )
-                    def on_ok():
-                        self.export_status.value = f"保存しました: {out_path}"
-                        self.export_status.color = ft.Colors.GREEN
-                        self.export_btn.disabled = False
-                        self.page.update()
-                    self.page.run_thread(on_ok)
-                except Exception as ex:
-                    err = ex
-                    def on_err():
-                        self.export_status.value = f"エラー: {str(err)}"
-                        self.export_status.color = ft.Colors.RED
-                        self.export_btn.disabled = False
-                        self.page.update()
-                    self.page.run_thread(on_err)
+        def write_pdf(path: str):
+            if not direct_save:
+                set_generating()
+            fetched = self._fetch_selected_data()
+            items_data = self._extract_items_data(fetched)
+            generate_invoice_receipt_pdf(
+                path,
+                items_data,
+                issue_date,
+                recipient=self._get_recipient(),
+                issuer=self._get_issuer(),
+                receipt_note=self._get_receipt_note(),
+            )
 
-            threading.Thread(target=do_mac, daemon=True).start()
+        def on_saved(path: str):
+            set_saved_file_status(self.export_status, self.page, path)
+            self.export_btn.disabled = False
+            self.page.update()
+
+        def on_error(ex: Exception):
+            clear_saved_file_status_action(self.export_status)
+            self.export_status.value = f"エラー: {str(ex)}"
+            self.export_status.color = ft.Colors.RED
+            self.export_btn.disabled = False
+            self.page.update()
+
+        def save():
+            saved_callback = on_saved
+            error_callback = on_error
+            if direct_save:
+                saved_callback = lambda path: self.page.run_thread(lambda: on_saved(path))
+                error_callback = lambda ex: self.page.run_thread(lambda: on_error(ex))
+
+            save_file_for_platform(
+                self.page,
+                dialog_title="請求書・領収証PDFを保存",
+                file_name=fname,
+                allowed_extensions=["pdf"],
+                write_file=write_pdf,
+                on_saved=saved_callback,
+                on_error=error_callback,
+            )
+
+        if direct_save:
+            set_generating()
+            threading.Thread(target=save, daemon=True).start()
             return
 
-        # Windows / Linux: FilePicker でダイアログ表示
-        def save_file(ev: ft.FilePickerResultEvent):
-            if not ev.path:
-                return
-            try:
-                fetched = self._fetch_selected_data()
-                items_data = self._extract_items_data(fetched)
-                generate_invoice_receipt_pdf(
-                    ev.path,
-                    items_data,
-                    issue_date,
-                    recipient=self._get_recipient(),
-                    issuer=self._get_issuer(),
-                    receipt_note=self._get_receipt_note(),
-                )
-                self._snack(f"保存しました: {ev.path}", ft.Colors.GREEN)
-            except Exception as ex:
-                self._snack(f"保存エラー: {str(ex)}", ft.Colors.RED)
-
-        file_picker = ft.FilePicker(on_result=save_file)
-        self.page.overlay.append(file_picker)
-        self.page.update()
-        file_picker.save_file(
-            dialog_title="請求書・領収証PDFを保存",
-            file_name=fname,
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["pdf"],
-        )
+        save()
 
     # ─────────────────────────────────────────────────────────────────
     # ユーティリティ

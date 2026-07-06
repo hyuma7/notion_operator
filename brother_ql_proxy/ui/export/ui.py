@@ -1,8 +1,22 @@
 import flet as ft
 from datetime import datetime, date
+from ..file_save import (
+    clear_saved_file_status_action,
+    save_file_for_platform,
+    set_saved_file_status,
+)
 from .service import ExportService, FetchCancelled
 import traceback
 import threading
+
+
+def _build_daily_excel_filename(start_date: date, end_date: date) -> str:
+    s_name = start_date.strftime("%Y-%m-%d")
+    e_name = end_date.strftime("%Y-%m-%d")
+    if s_name == e_name:
+        return f"日別売上_{s_name}.xlsx"
+    return f"日別売上_{s_name}_{e_name}.xlsx"
+
 
 class ExportTab:
     def __init__(self, proxy, page: ft.Page):
@@ -28,10 +42,12 @@ class ExportTab:
         self._build_ui()
 
     def _init_service(self):
-        api_key = self.proxy.config.get("notion_api_key", "")
-        database_id = self.proxy.config.get("notion_database_id", "")
+        api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
+        database_id = (self.proxy.config.get("notion_database_id", "") or "").strip()
         if api_key and database_id:
             self.service = ExportService(api_key, database_id)
+        else:
+            self.service = None
 
     def _build_ui(self):
         # --- Pivot Section Controls ---
@@ -240,6 +256,7 @@ class ExportTab:
 
         self._is_fetching = True
         self._show_progress(True)
+        clear_saved_file_status_action(self.pivot_result_text)
         self.pivot_result_text.value = "データを取得中..."
         self.export_pivot_btn.disabled = True
         self.fetch_pivot_btn.disabled = True
@@ -290,6 +307,7 @@ class ExportTab:
 
             except FetchCancelled:
                 def on_cancelled():
+                    clear_saved_file_status_action(self.pivot_result_text)
                     self.pivot_result_text.value = "⚠️ キャンセルされました"
                     self.export_pivot_btn.disabled = True
                 self.page.run_thread(on_cancelled)
@@ -298,6 +316,7 @@ class ExportTab:
                 err = ex
                 traceback.print_exc()
                 def on_error():
+                    clear_saved_file_status_action(self.pivot_result_text)
                     self.pivot_result_text.value = f"❌ エラー: {str(err)}"
                     self.export_pivot_btn.disabled = True
                 self.page.run_thread(on_error)
@@ -319,25 +338,17 @@ class ExportTab:
         if not self.pivot_data_cache:
             return
 
-        def save_file(e: ft.FilePickerResultEvent):
-            if e.path:
-                try:
-                    self.service.generate_excel(e.path, self.pivot_data_cache, self.pivot_data_cache['months'])
-                    self.show_snackbar(f"保存しました: {e.path}", ft.Colors.GREEN)
-                except Exception as ex:
-                    self.show_snackbar(f"保存エラー: {str(ex)}", ft.Colors.RED)
-
-        file_picker = ft.FilePicker(on_result=save_file)
-        self.page.overlay.append(file_picker)
-        self.page.update()
-
-        # Filename
         fname = f"財務集計_{self.pivot_data_cache.get('display_range', 'data')}.xlsx".replace("〜", "-")
-        file_picker.save_file(
+        save_file_for_platform(
+            self.page,
             dialog_title="財務集計Excelを保存",
             file_name=fname,
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["xlsx"]
+            allowed_extensions=["xlsx"],
+            write_file=lambda path: self.service.generate_excel(
+                path, self.pivot_data_cache, self.pivot_data_cache['months']
+            ),
+            on_saved=lambda path: self._on_excel_saved(self.pivot_result_text, path),
+            on_error=lambda ex: self._on_excel_save_error(self.pivot_result_text, ex),
         )
 
     def fetch_daily_data(self, e):
@@ -356,6 +367,7 @@ class ExportTab:
 
         self._is_fetching = True
         self._show_progress(True)
+        clear_saved_file_status_action(self.daily_result_text)
         self.daily_result_text.value = "日別データを取得中..."
         self.export_daily_btn.disabled = True
         self.fetch_daily_btn.disabled = True
@@ -392,6 +404,7 @@ class ExportTab:
 
             except FetchCancelled:
                 def on_cancelled():
+                    clear_saved_file_status_action(self.daily_result_text)
                     self.daily_result_text.value = "⚠️ キャンセルされました"
                     self.export_daily_btn.disabled = True
                 self.page.run_thread(on_cancelled)
@@ -400,6 +413,7 @@ class ExportTab:
                 err = ex
                 traceback.print_exc()
                 def on_error():
+                    clear_saved_file_status_action(self.daily_result_text)
                     self.daily_result_text.value = f"❌ エラー: {str(err)}"
                     self.export_daily_btn.disabled = True
                 self.page.run_thread(on_error)
@@ -421,30 +435,28 @@ class ExportTab:
         if not self.daily_sales_cache and not self.daily_purchases_cache:
             return
 
-        def save_file(e: ft.FilePickerResultEvent):
-            if e.path:
-                try:
-                    self.service.generate_daily_excel(
-                        e.path, self.daily_sales_cache, self.daily_purchases_cache
-                    )
-                    self.show_snackbar(f"保存しました: {e.path}", ft.Colors.GREEN)
-                except Exception as ex:
-                    self.show_snackbar(f"保存エラー: {str(ex)}", ft.Colors.RED)
-
-        file_picker = ft.FilePicker(on_result=save_file)
-        self.page.overlay.append(file_picker)
-        self.page.update()
-        
-        s_name = self.daily_start_date.strftime("%Y-%m-%d")
-        e_name = self.daily_end_date.strftime("%Y-%m-%d")
-        fname = f"日別売上_{s_name}_{e_name}.xlsx" if s_name != e_name else f"日別売上_{s_name}.xlsx"
-        
-        file_picker.save_file(
+        fname = _build_daily_excel_filename(self.daily_start_date, self.daily_end_date)
+        save_file_for_platform(
+            self.page,
             dialog_title="日別売上Excelを保存",
             file_name=fname,
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["xlsx"]
+            allowed_extensions=["xlsx"],
+            write_file=lambda path: self.service.generate_daily_excel(
+                path, self.daily_sales_cache, self.daily_purchases_cache
+            ),
+            on_saved=lambda path: self._on_excel_saved(self.daily_result_text, path),
+            on_error=lambda ex: self._on_excel_save_error(self.daily_result_text, ex),
         )
+
+    def _on_excel_saved(self, status_text: ft.Text, path: str):
+        set_saved_file_status(status_text, self.page, path)
+        self.show_snackbar(f"保存しました: {path}", ft.Colors.GREEN)
+
+    def _on_excel_save_error(self, status_text: ft.Text, ex: Exception):
+        clear_saved_file_status_action(status_text)
+        status_text.value = f"保存エラー: {str(ex)}"
+        status_text.color = ft.Colors.RED
+        self.show_snackbar(f"保存エラー: {str(ex)}", ft.Colors.RED)
 
 def create_export_tab(proxy, page):
     """Factory function"""

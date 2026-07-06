@@ -9,7 +9,7 @@ import logging
 from contextlib import contextmanager
 from typing import Dict, Any
 
-from .config import CONFIG_FILE, DEFAULT_CONFIG, LOG_FILE
+from .config import CONFIG_FILE, DEFAULT_CONFIG, LEGACY_CONFIG_FILES, LOG_FILE
 
 # ロギング設定
 logging.basicConfig(
@@ -29,11 +29,23 @@ class PrinterProxy:
         
     def load_config(self):
         """設定ファイルを読み込む"""
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        config_path = self._find_config_file()
+        if config_path:
+            with open(config_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                return {**DEFAULT_CONFIG, **config}
+            merged_config = {**DEFAULT_CONFIG, **config}
+            if os.path.abspath(config_path) != os.path.abspath(CONFIG_FILE):
+                self.config = merged_config
+                self.save_config()
+            return merged_config
         return DEFAULT_CONFIG.copy()
+
+    def _find_config_file(self):
+        """現行または旧配置の設定ファイルを探す"""
+        for path in (CONFIG_FILE, *LEGACY_CONFIG_FILES):
+            if os.path.exists(path):
+                return path
+        return None
     
     def save_config(self):
         """設定ファイルを保存"""

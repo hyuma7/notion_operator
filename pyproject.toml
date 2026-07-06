@@ -1,6 +1,6 @@
 [project]
 name = "notion-operator"
-version = "0.1.0"
+version = "0.4.3"  # 実体は version.py の __version__（そちらが唯一のソース）
 description = "Notion連携 ラベル印刷・データ出力ツール"
 requires-python = ">=3.10"
 dependencies = [

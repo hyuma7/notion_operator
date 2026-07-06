@@ -2,7 +2,12 @@
 設定タブコンポーネント
 """
 
+import os
+
 import flet as ft
+
+from brother_ql_proxy.core.config import CONFIG_FILE
+from updater.ui import get_update_section
 
 
 class ConfigTab:
@@ -122,6 +127,12 @@ class ConfigTab:
             icon=ft.Icons.SAVE,
             on_click=self.save_config
         )
+        self.config_path_text = ft.Text(
+            f"保存先: {CONFIG_FILE}",
+            size=11,
+            color=ft.Colors.GREY_600,
+            selectable=True,
+        )
     
     def save_config(self, e):
         """設定を保存"""
@@ -129,8 +140,8 @@ class ConfigTab:
             self.proxy.config['printer_ip'] = self.printer_ip_field.value
             self.proxy.config['printer_port'] = int(self.printer_port_field.value)
             self.proxy.config['label_size'] = self.label_size_dropdown.value
-            self.proxy.config['notion_api_key'] = self.notion_api_key_field.value
-            self.proxy.config['notion_database_id'] = self.notion_database_id_field.value
+            self.proxy.config['notion_api_key'] = (self.notion_api_key_field.value or "").strip()
+            self.proxy.config['notion_database_id'] = (self.notion_database_id_field.value or "").strip()
             self.proxy.config['vercel_base_url'] = self.vercel_base_url_field.value.rstrip('/')
             self.proxy.config['issuer_company_name'] = (self.issuer_company_name_field.value or "").strip()
             self.proxy.config['issuer_representative'] = (self.issuer_representative_field.value or "").strip()
@@ -149,7 +160,11 @@ class ConfigTab:
             ).strip()
 
             self.proxy.save_config()
-            self.show_snackbar("設定を保存しました", ft.Colors.GREEN)
+            if self.proxy.config['notion_api_key']:
+                os.environ["NOTION_API_KEY"] = self.proxy.config['notion_api_key']
+            if self.proxy.config['notion_database_id']:
+                os.environ["NOTION_DATABASE_ID"] = self.proxy.config['notion_database_id']
+            self.show_snackbar(f"設定を保存しました: {CONFIG_FILE}", ft.Colors.GREEN)
         except ValueError as e:
             self.show_snackbar("ポート番号は数値で入力してください", ft.Colors.RED)
         except Exception as e:
@@ -221,10 +236,12 @@ class ConfigTab:
                             ])
                         )
                     ),
+                    get_update_section(self.page).create_card(),
                     ft.Container(
                         padding=ft.padding.only(top=20),
                         content=self.save_btn
-                    )
+                    ),
+                    self.config_path_text
                 ], scroll=ft.ScrollMode.AUTO)
             )
         )
