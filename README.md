@@ -26,6 +26,8 @@ cd local_server
 python run_proxy.py
 ```
 
+Macアプリとして配布する場合の手順は [docs/MAC_APP_BUILD.md](docs/MAC_APP_BUILD.md) を参照してください。
+
 ## 使用方法
 
 ### ステータスタブ

@@ -1,0 +1,106 @@
+# v* タグの push で macOS / Windows 両方のビルドを GitHub Release に添付する
+#
+# リリース手順:
+#   1. version.py の __version__ を上げてコミット
+#   2. git tag v0.4.0 && git push origin v0.4.0
+#
+# アプリ内アップデーター（updater/）は releases/latest のアセット名
+# （NotionOperator-<version>-<platform>.zip）を見て自分の分を選ぶ。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            key: macos-arm64
+          - os: windows-latest
+            key: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: バージョンとタグの一致を確認
+        shell: bash
+        run: |
+          VERSION=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' version.py | head -1)
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "version.py ($VERSION) とタグ ($GITHUB_REF_NAME) が一致しません" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: ビルド
+        shell: bash
+        run: |
+          uv run --with pyinstaller flet pack main.py \
+            --name "Notion Operator" \
+            --product-name "Notion Operator" \
+            --product-version "$VERSION" \
+            --bundle-id com.hyuma7.notion-operator \
+            --distpath dist \
+            --hidden-import selenium.webdriver.chrome.webdriver \
+            --hidden-import selenium.webdriver.chrome.options \
+            --hidden-import selenium.webdriver.chrome.service \
+            --hidden-import selenium.webdriver.common.by \
+            --hidden-import selenium.webdriver.common.keys \
+            --hidden-import selenium.webdriver.support.ui \
+            --hidden-import selenium.webdriver.support.expected_conditions \
+            --hidden-import webdriver_manager.chrome \
+            --hidden-import webdriver_manager.core.driver_cache \
+            -y
+
+      - name: 配布用zipとチェックサムを作成 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ZIP="dist/NotionOperator-$VERSION-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/Notion Operator.app" "$ZIP"
+          shasum -a 256 "$ZIP" | awk '{print $1}' > "$ZIP.sha256"
+
+      - name: 配布用zipとチェックサムを作成 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = "dist/NotionOperator-$env:VERSION-windows-x64.zip"
+          Compress-Archive -Path "dist/Notion Operator.exe" -DestinationPath $zip
+          (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() |
+            Out-File -NoNewline -Encoding ascii "$zip.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.key }}
+          path: |
+            dist/NotionOperator-*.zip
+            dist/NotionOperator-*.zip.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: GitHub Release を作成
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
