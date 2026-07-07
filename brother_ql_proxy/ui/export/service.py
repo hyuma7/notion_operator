@@ -1035,31 +1035,37 @@ class ExportService:
         ws_sales = wb.active
         ws_sales.title = "売上"
 
+        def cost_rate(r):
+            """原価率 = 仕入れ原価 ÷ 売上金 × 100（売上金が0/原価が未設定なら空欄）"""
+            if r.sales_amount and r.cost_price is not None:
+                return round(r.cost_price / r.sales_amount * 100, 1)
+            return None
+
         sales_columns = [
-            ("商品名",       lambda r: r.product_name),
-            ("型番",         lambda r: r.model_number),
-            ("製番",         lambda r: r.serial_number),
-            ("売却日",       lambda r: r.sold_date),
-            ("売上金",       lambda r: r.sales_amount),
-            ("仕入れ金",     lambda r: r.purchase_cost),
-            ("仕入れ手数料", lambda r: r.purchase_fee),
-            ("仕入れ原価",   lambda r: r.cost_price),
-            ("送料",         lambda r: r.shipping_cost),
-            ("送料計算方法", lambda r: r.shipping_method),
-            ("販売手数料",   lambda r: r.commission),
-            ("純利益",       lambda r: r.profit),
-            ("利益率",       lambda r: r.profit_rate),
-            ("仕入れ先",     lambda r: r.supplier),
-            ("仕入れ日",     lambda r: r.purchase_date),
-            ("販売媒体名",   lambda r: r.sales_channel),
-            ("作業担当",     lambda r: r.assignee),
-            ("伝票番号",     lambda r: r.slip_number),
-            ("発送伝票番号", lambda r: r.shipping_slip_number),
-            ("購入者名",     lambda r: r.buyer_name),
+            ("仕入れ日",       lambda r: r.purchase_date),
+            ("仕入れ先",       lambda r: r.supplier),
+            ("メーカー",       lambda r: r.maker),
+            ("商品名",         lambda r: r.product_name),
+            ("型番",           lambda r: r.model_number),
+            ("年式",           lambda r: r.year),
+            ("製番",           lambda r: r.serial_number),
+            ("販売媒体",       lambda r: r.sales_channel),
+            ("作業担当",       lambda r: r.assignee),
+            ("売上金",         lambda r: r.sales_amount),
+            ("仕入れ金",       lambda r: r.purchase_cost),
+            ("仕入れ手数料",   lambda r: r.purchase_fee),
+            ("仕入れ原価",     lambda r: r.cost_price),
+            ("幹線便料金",     lambda r: r.trunk_line_fee),
+            ("プロモーション", lambda r: r.promotion),
+            ("送料",           lambda r: r.shipping_cost),
+            ("送料計算方法",   lambda r: r.shipping_method),
+            ("販売手数料",     lambda r: r.commission),
+            ("純利益",         lambda r: r.profit),
+            ("原価率",         cost_rate),
         ]
         numeric_sales_cols = {
             "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
-            "送料", "販売手数料", "純利益", "発送伝票番号",
+            "幹線便料金", "プロモーション", "送料", "販売手数料", "純利益",
         }
 
         # ヘッダー行
@@ -1081,11 +1087,11 @@ class ExportService:
         total_row = len(sales) + 2
         numeric_totals = {
             "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
-            "送料", "販売手数料", "純利益",
+            "幹線便料金", "プロモーション", "送料", "販売手数料", "純利益",
         }
-        # 利益率の平均（None を除いた件数で割る）
-        profit_rates = [r.profit_rate for r in sales if r.profit_rate is not None]
-        avg_profit_rate = sum(profit_rates) / len(profit_rates) if profit_rates else None
+        # 原価率の平均（計算できたレコードの件数で割る）
+        cost_rates = [cr for cr in (cost_rate(r) for r in sales) if cr is not None]
+        avg_cost_rate = round(sum(cost_rates) / len(cost_rates), 1) if cost_rates else None
 
         for col_idx, (col_name, getter) in enumerate(sales_columns, 1):
             if col_name in numeric_totals:
@@ -1094,8 +1100,8 @@ class ExportService:
                 cell.number_format = "#,##0"
                 cell.fill = total_fill
                 cell.font = bold_font
-            elif col_name == "利益率":
-                cell = ws_sales.cell(row=total_row, column=col_idx, value=avg_profit_rate)
+            elif col_name == "原価率":
+                cell = ws_sales.cell(row=total_row, column=col_idx, value=avg_cost_rate)
                 cell.fill = total_fill
                 cell.font = bold_font
             elif col_idx == 1:
@@ -1103,12 +1109,10 @@ class ExportService:
                 cell.fill = total_fill
                 cell.font = bold_font
 
-        # 列幅
-        ws_sales.column_dimensions["A"].width = 28
+        # 列幅（商品名だけ広め、他は固定幅）
         for col_idx, (col_name, _) in enumerate(sales_columns, 1):
-            if col_idx > 1:
-                col_letter = ws_sales.cell(row=1, column=col_idx).column_letter
-                ws_sales.column_dimensions[col_letter].width = 14
+            col_letter = ws_sales.cell(row=1, column=col_idx).column_letter
+            ws_sales.column_dimensions[col_letter].width = 28 if col_name == "商品名" else 14
 
         # ---- 仕入れシート ----
         ws_purchase = wb.create_sheet(title="仕入れ")

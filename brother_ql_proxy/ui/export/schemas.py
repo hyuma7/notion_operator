@@ -117,11 +117,15 @@ class DailySoldRecord(NotionRecord):
     product_name: str = Field(alias="商品名", default="")
     model_number: str = Field(alias="型番名", default="")
     serial_number: str = Field(alias="製番", default="")
+    maker: str = Field(alias="メーカー", default="")
+    year: str = Field(alias="年式", default="")
     sold_date: Optional[date] = Field(alias="売却日", default=None)
     sales_amount: float = Field(alias="売上金", default=0)
     purchase_cost: float = Field(alias="仕入れ金", default=0)
     purchase_fee: Optional[float] = Field(alias="仕入れ手数料", default=None)
     cost_price: Optional[float] = Field(alias="仕入れ原価", default=None)
+    trunk_line_fee: Optional[float] = Field(alias="幹線便料金", default=None)
+    promotion: Optional[float] = Field(alias="プロモーション", default=None)
     shipping_cost: float = Field(alias="送料", default=0)
     shipping_method: str = Field(alias="送料計算方法", default="")
     commission: Optional[float] = Field(alias="販売手数料", default=None)
@@ -150,7 +154,7 @@ class DailySoldRecord(NotionRecord):
                 return 0.0
         return 0.0
 
-    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', mode='before')
+    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', 'trunk_line_fee', 'promotion', mode='before')
     @classmethod
     def clean_optional_number(cls, v: Any) -> Optional[float]:
         if v is None or v == "":
