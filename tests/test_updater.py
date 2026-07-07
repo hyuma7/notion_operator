@@ -1,11 +1,12 @@
 """updater モジュールのテスト"""
 
 import hashlib
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from updater import checker, downloader
+from updater import checker, downloader, _install_win
 from updater.checker import parse_version, select_asset, find_checksum_url
 
 
@@ -90,6 +91,68 @@ class TestCheckForUpdate:
     def test_unsupported_platform(self, mock_fetch, _key):
         mock_fetch.return_value = self._release("v0.5.0")
         assert checker.check_for_update("0.4.0") is None
+
+
+class TestInstallWin:
+    def _make_zip(self, tmp_path):
+        zip_path = tmp_path / "NotionOperator-0.5.0-windows-x64.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("Notion Operator.exe", b"new exe")
+        return zip_path
+
+    def test_helper_env_excludes_pyinstaller_vars(self, tmp_path, monkeypatch):
+        # _PYI_* が新exeまで相続されると、削除済み _MEI フォルダを参照して
+        # 起動に失敗する（Failed to load Python DLL）ため、除去されること
+        monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", r"C:\Temp\_MEI404122")
+        monkeypatch.setenv("_PYI_PARENT_PROCESS_LEVEL", "1")
+        monkeypatch.setenv("_MEIPASS2", r"C:\Temp\_MEI404122")
+        monkeypatch.setenv("NORMAL_VAR", "keep me")
+
+        with patch("updater._install_win.subprocess.Popen") as mock_popen:
+            _install_win.install_and_restart(
+                self._make_zip(tmp_path), tmp_path / "old.exe"
+            )
+
+        env = mock_popen.call_args.kwargs["env"]
+        assert "_PYI_APPLICATION_HOME_DIR" not in env
+        assert "_PYI_PARENT_PROCESS_LEVEL" not in env
+        assert "_MEIPASS2" not in env
+        assert env["NORMAL_VAR"] == "keep me"
+
+    def test_helper_script_replaces_and_restarts(self, tmp_path):
+        old_exe = tmp_path / "Notion Operator.exe"
+        with patch("updater._install_win.subprocess.Popen") as mock_popen:
+            _install_win.install_and_restart(self._make_zip(tmp_path), old_exe)
+
+        cmd = mock_popen.call_args.args[0]
+        assert cmd[:2] == ["cmd", "/c"]
+        script = cmd[2]
+        content = open(script, encoding="cp932").read()
+        assert "Wait-Process" in content
+        assert str(old_exe) in content
+        assert "Notion Operator.exe" in content
+
+    def test_helper_waits_for_parent_process_too(self, tmp_path):
+        # onefile ではブートローダー（親）が exe のロックを握ったまま
+        # _MEI の削除を行うため、親子両方の PID を待つ必要がある
+        import os
+
+        with patch("updater._install_win.subprocess.Popen") as mock_popen:
+            _install_win.install_and_restart(
+                self._make_zip(tmp_path), tmp_path / "old.exe"
+            )
+
+        script = mock_popen.call_args.args[0][2]
+        content = open(script, encoding="cp932").read()
+        assert f"Wait-Process -Id {os.getpid()},{os.getppid()}" in content
+        assert "-lt 60" in content
+
+    def test_zip_without_exe(self, tmp_path):
+        zip_path = tmp_path / "bad.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("readme.txt", b"no exe here")
+        with pytest.raises(RuntimeError, match=".exe が見つかりません"):
+            _install_win.install_and_restart(zip_path, tmp_path / "old.exe")
 
 
 class TestVerifySha256:
