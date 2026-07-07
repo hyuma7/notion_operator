@@ -132,6 +132,21 @@ class TestInstallWin:
         assert str(old_exe) in content
         assert "Notion Operator.exe" in content
 
+    def test_helper_waits_for_parent_process_too(self, tmp_path):
+        # onefile ではブートローダー（親）が exe のロックを握ったまま
+        # _MEI の削除を行うため、親子両方の PID を待つ必要がある
+        import os
+
+        with patch("updater._install_win.subprocess.Popen") as mock_popen:
+            _install_win.install_and_restart(
+                self._make_zip(tmp_path), tmp_path / "old.exe"
+            )
+
+        script = mock_popen.call_args.args[0][2]
+        content = open(script, encoding="cp932").read()
+        assert f"Wait-Process -Id {os.getpid()},{os.getppid()}" in content
+        assert "-lt 60" in content
+
     def test_zip_without_exe(self, tmp_path):
         zip_path = tmp_path / "bad.zip"
         with zipfile.ZipFile(zip_path, "w") as zf:

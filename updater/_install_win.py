@@ -2,8 +2,13 @@
 
 実行中の .exe はロックされ上書きできないため、別プロセスのスクリプトに
 「本体の終了を待つ → .exe を差し替え → 再起動」を任せる。
-プロセス終了直後はファイルロック解放にラグがあることがあるため、
-差し替えは最大10回リトライする。
+
+PyInstaller onefile ではアプリ本体（子）だけでなくブートローダー（親）も
+同じ .exe を実行しており、親が _MEI フォルダの削除を終えて終了するまで
+.exe はロックされたままになる。そのため親子両方の PID を待ってから
+差し替える。ウイルススキャンや OneDrive 同期による一時的なロックに
+備えて差し替えは最大60回リトライし、それでも失敗した場合は
+%TEMP% にエラーログを残して旧 exe を再起動する。
 """
 
 import os
@@ -13,10 +18,13 @@ import zipfile
 from pathlib import Path
 
 _PS_TEMPLATE = (
-    "Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
-    "for ($i = 0; $i -lt 10; $i++) {{ "
+    "Wait-Process -Id {pids} -ErrorAction SilentlyContinue; "
+    "for ($i = 0; $i -lt 60; $i++) {{ "
     "try {{ Move-Item -Force -LiteralPath '{new_exe}' '{old_exe}'; break }} "
     "catch {{ Start-Sleep -Seconds 1 }} }}; "
+    "if (Test-Path -LiteralPath '{new_exe}') {{ "
+    "Set-Content -LiteralPath '{error_log}' "
+    "'update failed: could not replace exe' }}; "
     "Start-Process -FilePath '{old_exe}'"
 )
 
@@ -52,7 +60,13 @@ def install_and_restart(zip_path: Path, old_exe: Path) -> None:
         raise RuntimeError("ダウンロードしたzipに .exe が見つかりません")
     new_exe = exes[0]
 
-    ps_command = _PS_TEMPLATE.format(pid=os.getpid(), new_exe=new_exe, old_exe=old_exe)
+    error_log = Path(tempfile.gettempdir()) / "NotionOperator-update-error.log"
+    ps_command = _PS_TEMPLATE.format(
+        pids=f"{os.getpid()},{os.getppid()}",
+        new_exe=new_exe,
+        old_exe=old_exe,
+        error_log=error_log,
+    )
     script_path = workdir / "update.bat"
     # cmd はバッチをOEMコードページ（日本語環境は cp932）で読む
     script_path.write_text(
