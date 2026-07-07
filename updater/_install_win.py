@@ -26,6 +26,21 @@ rmdir /s /q "{workdir}"
 """
 
 
+def _clean_env() -> dict:
+    """PyInstaller onefile の内部環境変数を除去した環境を返す
+
+    _PYI_* が新しい exe まで相続されると、ブートローダーが自身を
+    「実行中アプリのサブプロセス」と誤認して再展開をスキップし、
+    旧プロセスの終了時に削除済みの _MEI フォルダから DLL を
+    ロードしようとして起動に失敗する。
+    """
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("_PYI_") and k != "_MEIPASS2"
+    }
+
+
 def install_and_restart(zip_path: Path, old_exe: Path) -> None:
     workdir = Path(tempfile.mkdtemp(prefix="notion_operator_update_"))
     extract_dir = workdir / "extracted"
@@ -52,4 +67,5 @@ def install_and_restart(zip_path: Path, old_exe: Path) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=True,
+        env=_clean_env(),
     )
