@@ -72,7 +72,7 @@ class PurchaseRecord(NotionRecord):
     supplier_category: str = Field(alias="仕入先カテゴリ", default="その他")
     assignee: Optional[str] = Field(alias="作業担当", default=None)
     
-    purchase_date: Optional[datetime] = Field(alias="Created time", default=None) # Using Created time as purchase date
+    purchase_date: Optional[date] = Field(alias="仕入れ日", default=None) # 仕入れ日ベースで帰属月を計算
     purchase_year_month: Optional[str] = None # Calculated
 
     @field_validator('cost_price', mode='before')

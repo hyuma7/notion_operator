@@ -1,6 +1,7 @@
 import pandas as pd
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 from notion_client import Client
 from notion_client.errors import APIResponseError
 from typing import List, Dict, Any, Optional, Tuple, Callable
@@ -33,6 +34,8 @@ class ExportService:
         self._cancelled = False
         # 進捗コールバック
         self._progress_callback: Optional[Callable[[int, int, str], None]] = None
+        # プロパティ名 → ID のキャッシュ（filter_properties 用）
+        self._property_id_map: Optional[Dict[str, str]] = None
 
     def set_progress_callback(self, callback: Optional[Callable[[int, int, str], None]]):
         """進捗コールバックを設定
@@ -60,11 +63,18 @@ class ExportService:
         if self._progress_callback:
             self._progress_callback(current, total, message)
 
-    def _query_with_retry(self, query_params: Dict[str, Any]) -> Dict[str, Any]:
+    def _query_with_retry(
+        self,
+        query_params: Dict[str, Any],
+        filter_properties: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """リトライロジック付きでNotion APIをクエリ
 
         Args:
             query_params: databases.queryに渡すパラメータ
+            filter_properties: 取得するプロパティのID一覧。指定時は
+                ?filter_properties=<id>&... をクエリ文字列で渡し、
+                レスポンスに含めるプロパティを絞り込む（転送量の削減）。
 
         Returns:
             APIレスポンス
@@ -82,8 +92,14 @@ class ExportService:
             try:
                 params = dict(query_params)
                 database_id = params.pop("database_id")
+                path = f"databases/{database_id}/query"
+                if filter_properties:
+                    query_string = urlencode(
+                        [("filter_properties", pid) for pid in filter_properties]
+                    )
+                    path = f"{path}?{query_string}"
                 result = self.notion.request(
-                    path=f"databases/{database_id}/query",
+                    path=path,
                     method="POST",
                     body=params,
                 )
@@ -120,6 +136,41 @@ class ExportService:
         if last_error:
             raise last_error
         raise RuntimeError(f"リトライ回数({self.MAX_RETRIES})を超過しました")
+
+    def _get_property_ids(self, names: List[str]) -> List[str]:
+        """プロパティ名のリストを対応する property ID のリストに解決する。
+
+        DB スキーマ（databases/{id}）を 1 回だけ取得してキャッシュし、
+        プロパティ名 → id のマップを作る。filter_properties 用。
+
+        Args:
+            names: 解決したいプロパティ名のリスト
+
+        Returns:
+            解決できた property ID のリスト。1件も解決できない、または
+            スキーマ取得に失敗した場合は空リストを返す（呼び出し側は
+            絞り込みなしにフォールバックする）。
+        """
+        if self._property_id_map is None:
+            try:
+                db = self.notion.request(
+                    path=f"databases/{self.database_id}",
+                    method="GET",
+                )
+                self._property_id_map = {
+                    name.strip(): prop.get("id")
+                    for name, prop in db.get("properties", {}).items()
+                }
+            except Exception as e:
+                print(f"プロパティID取得に失敗しました（絞り込みなしで続行）: {e}")
+                self._property_id_map = {}
+
+        ids = [
+            self._property_id_map[name]
+            for name in names
+            if name in self._property_id_map and self._property_id_map[name]
+        ]
+        return ids
 
     def fetch_sales_data(self, start_date: str, end_date: str) -> List[SoldRecord]:
         """Fetch sold items from Notion within the date range
@@ -192,7 +243,11 @@ class ExportService:
         return records
 
     def fetch_purchase_data(self, start_date: str, end_date: str) -> List[PurchaseRecord]:
-        """Fetch all items from Notion created within the date range
+        """Fetch items from Notion whose 仕入れ日 falls within the date range
+
+        「仕入れ日」プロパティに対するサーバーサイドの date フィルタで必要な
+        レコードだけを取得する。帰属月は仕入れ日ベースで計算される。
+        仕入れ日が未入力のアイテムはフィルタにより集計対象外になる（仕様）。
 
         Args:
             start_date: 開始日 (YYYY-MM-DD形式)
@@ -215,8 +270,14 @@ class ExportService:
         start_cursor = None
         page_count = 0
 
-        start_dt = pd.to_datetime(start_date, utc=True)
-        end_dt = pd.to_datetime(end_date, utc=True)
+        # PurchaseRecord が必要とするプロパティのみ取得して転送量を削る。
+        # ID 解決に失敗した場合は絞り込みなし（全プロパティ取得）にフォールバック。
+        filter_properties = self._get_property_ids(
+            ["仕入れ原価", "仕入れ先名", "仕入先カテゴリ", "作業担当", "仕入れ日"]
+        )
+        if not filter_properties:
+            print("filter_properties のID解決に失敗しました（全プロパティ取得で続行）")
+            filter_properties = None
 
         self._report_progress(0, -1, "仕入データを取得中...")
 
@@ -225,12 +286,18 @@ class ExportService:
 
             query_params = {
                 "database_id": self.database_id,
-                "page_size": 100
+                "filter": {
+                    "and": [
+                        {"property": "仕入れ日", "date": {"on_or_after": start_date}},
+                        {"property": "仕入れ日", "date": {"before": end_date}},
+                    ]
+                },
+                "page_size": 100,
             }
             if start_cursor:
                 query_params["start_cursor"] = start_cursor
 
-            results = self._query_with_retry(query_params)
+            results = self._query_with_retry(query_params, filter_properties=filter_properties)
             all_results.extend(results["results"])
             has_more = results.get("has_more", False)
             start_cursor = results.get("next_cursor")
@@ -243,15 +310,6 @@ class ExportService:
 
         records = []
         for page in all_results:
-            # Filter by created_time locally (Notion API limited on filtering created_time in some contexts, keeping existing logic)
-            created_time = page.get("created_time")
-            if not created_time:
-                continue
-                
-            ct_dt = pd.to_datetime(created_time, utc=True)
-            if not (start_dt <= ct_dt < end_dt):
-                continue
-
             flat_data = self._flatten_notion_page(page)
             try:
                 record = PurchaseRecord(**flat_data)
@@ -433,11 +491,6 @@ class ExportService:
         pivot_purchase = pd.DataFrame()
         if not df_purchases.empty:
             pivot_purchase = df_purchases.pivot_table(index='supplier', columns='purchase_year_month', values='cost_price', aggfunc='sum', fill_value=0)
-        elif not df_sales.empty:
-            # Fallback: calculate purchase cost from sales records (legacy behavior)
-            pivot_purchase = df_sales.pivot_table(index='supplier', columns='sold_year_month', values='cost_price', aggfunc='sum', fill_value=0)
-            # Use fallback mapping
-            purchase_company_category_map = {k: v for k, v in company_category_map.items()} # Simplification
 
         # Ensure all months are present in columns
         all_pivots = [
@@ -523,10 +576,14 @@ class ExportService:
         # 1. Summary Section (Optional, but present in original)
         # Re-calc summary from raw sales records if possible
         df_sales = data.get('sales_records')
-        if df_sales is not None and not df_sales.empty:
+        df_purchases = data.get('purchase_records')
+        has_sales = df_sales is not None and not df_sales.empty
+        has_purchases = df_purchases is not None and not df_purchases.empty
+        # 売上か仕入のどちらかがあれば全体合算ブロックを描画する
+        if has_sales or has_purchases:
              ws.cell(row=current_row, column=1, value="全体合算").font = Font(bold=True, size=14)
              current_row += 1
-             
+
              # Headers
              ws.cell(row=current_row, column=1, value="内訳").fill = header_fill
              for i, m in enumerate(months, 2):
@@ -537,19 +594,27 @@ class ExportService:
              ws.cell(row=current_row, column=len(months)+2, value="計").fill = header_fill
              current_row += 1
 
-             summary_items = ["売上", "原価", "粗利", "販売手数料", "送料", "販売利益"]
+             # 仕入高は仕入レコード（仕入れ日ベース）、その他は売却レコードから集計
+             summary_items = ["売上", "原価", "粗利", "販売手数料", "送料", "販売利益", "仕入高"]
              # Calculate sums
              sums = {item: {m: 0.0 for m in months} for item in summary_items}
-             
-             for _, row in df_sales.iterrows():
-                 m = row['sold_year_month']
-                 if m in months:
-                     sums["売上"][m] += row['sales_amount']
-                     sums["原価"][m] += row['cost_price']
-                     sums["販売手数料"][m] += row['commission']
-                     sums["送料"][m] += row['shipping_cost']
-                     sums["販売利益"][m] += row['profit']
-                     sums["粗利"][m] = sums["売上"][m] - sums["原価"][m]
+
+             if has_sales:
+                 for _, row in df_sales.iterrows():
+                     m = row['sold_year_month']
+                     if m in months:
+                         sums["売上"][m] += row['sales_amount']
+                         sums["原価"][m] += row['cost_price']
+                         sums["販売手数料"][m] += row['commission']
+                         sums["送料"][m] += row['shipping_cost']
+                         sums["販売利益"][m] += row['profit']
+                         sums["粗利"][m] = sums["売上"][m] - sums["原価"][m]
+
+             if has_purchases:
+                 for _, row in df_purchases.iterrows():
+                     m = row['purchase_year_month']
+                     if m in months:
+                         sums["仕入高"][m] += row['cost_price']
 
              for item in summary_items:
                  ws.cell(row=current_row, column=1, value=item).fill = total_fill
