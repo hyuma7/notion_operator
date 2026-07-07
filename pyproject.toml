@@ -26,3 +26,5 @@ dependencies = [
 # スクリプトベースのプロジェクト（パッケージビルド不要）
 package = false
 
+[tool.flet]
+flutter_build_args = ["--cmake-generator=Visual Studio 17 2022"]
