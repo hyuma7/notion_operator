@@ -6,4 +6,4 @@
 3. GitHub Actions が両OSのビルドを Release に添付する
 """
 
-__version__ = "0.4.6"
+__version__ = "0.4.7"

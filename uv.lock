@@ -829,7 +829,7 @@ wheels = [
 
 [[package]]
 name = "notion-operator"
-version = "0.4.6"
+version = "0.4.7"
 source = { virtual = "." }
 dependencies = [
     { name = "brother", version = "2.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
