@@ -1083,31 +1083,37 @@ class ExportService:
                 if col_name in numeric_sales_cols and value is not None:
                     cell.number_format = "#,##0"
 
-        # 合計行
+        # 合計行（SUBTOTAL: フィルタで絞り込んだ表示行だけを集計する）
         total_row = len(sales) + 2
         numeric_totals = {
             "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
             "幹線便料金", "プロモーション", "送料", "販売手数料", "純利益",
         }
-        # 原価率の平均（計算できたレコードの件数で割る）
-        cost_rates = [cr for cr in (cost_rate(r) for r in sales) if cr is not None]
-        avg_cost_rate = round(sum(cost_rates) / len(cost_rates), 1) if cost_rates else None
-
         for col_idx, (col_name, getter) in enumerate(sales_columns, 1):
+            col_letter = ws_sales.cell(row=1, column=col_idx).column_letter
+            data_range = f"{col_letter}2:{col_letter}{total_row - 1}"
             if col_name in numeric_totals:
-                total = sum(getter(r) or 0 for r in sales)
-                cell = ws_sales.cell(row=total_row, column=col_idx, value=total)
+                value = f"=SUBTOTAL(109,{data_range})" if sales else 0
+                cell = ws_sales.cell(row=total_row, column=col_idx, value=value)
                 cell.number_format = "#,##0"
                 cell.fill = total_fill
                 cell.font = bold_font
             elif col_name == "原価率":
-                cell = ws_sales.cell(row=total_row, column=col_idx, value=avg_cost_rate)
+                # 表示行の原価率の平均。対象が0件だと AVERAGE がエラーになるので空表示に落とす
+                value = (
+                    f"=IFERROR(ROUND(SUBTOTAL(101,{data_range}),1),\"\")" if sales else None
+                )
+                cell = ws_sales.cell(row=total_row, column=col_idx, value=value)
                 cell.fill = total_fill
                 cell.font = bold_font
             elif col_idx == 1:
                 cell = ws_sales.cell(row=total_row, column=col_idx, value="合計")
                 cell.fill = total_fill
                 cell.font = bold_font
+
+        # オートフィルタ（合計行は範囲に含めない）
+        last_col_letter = ws_sales.cell(row=1, column=len(sales_columns)).column_letter
+        ws_sales.auto_filter.ref = f"A1:{last_col_letter}{max(total_row - 1, 1)}"
 
         # 列幅（商品名だけ広め、他は固定幅）
         for col_idx, (col_name, _) in enumerate(sales_columns, 1):
@@ -1155,13 +1161,15 @@ class ExportService:
                 if col_name in numeric_purchase_cols and value is not None:
                     cell.number_format = "#,##0"
 
-        # 合計行
+        # 合計行（SUBTOTAL: フィルタで絞り込んだ表示行だけを集計する）
         total_row_p = len(purchases) + 2
         numeric_purchase_totals = {"仕入れ金", "仕入れ手数料", "仕入れ原価", "見込み売上"}
         for col_idx, (col_name, getter) in enumerate(purchase_columns, 1):
             if col_name in numeric_purchase_totals:
-                total = sum(getter(r) or 0 for r in purchases)
-                cell = ws_purchase.cell(row=total_row_p, column=col_idx, value=total)
+                col_letter = ws_purchase.cell(row=1, column=col_idx).column_letter
+                data_range = f"{col_letter}2:{col_letter}{total_row_p - 1}"
+                value = f"=SUBTOTAL(109,{data_range})" if purchases else 0
+                cell = ws_purchase.cell(row=total_row_p, column=col_idx, value=value)
                 cell.number_format = "#,##0"
                 cell.fill = total_fill
                 cell.font = bold_font
@@ -1169,6 +1177,10 @@ class ExportService:
                 cell = ws_purchase.cell(row=total_row_p, column=col_idx, value="合計")
                 cell.fill = total_fill
                 cell.font = bold_font
+
+        # オートフィルタ（合計行は範囲に含めない）
+        last_col_letter_p = ws_purchase.cell(row=1, column=len(purchase_columns)).column_letter
+        ws_purchase.auto_filter.ref = f"A1:{last_col_letter_p}{max(total_row_p - 1, 1)}"
 
         # 列幅
         ws_purchase.column_dimensions["A"].width = 28
