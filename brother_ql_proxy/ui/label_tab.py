@@ -18,13 +18,12 @@ from brother_ql_proxy.utils import convert_to_brother_format
 LABEL_PAIR_FIELDS = [
     (("メーカー", "型番名 "),   ("メーカー", "型番")),
     (("仕入れ先名", "仕入れ日"), ("仕入先",  "仕入れ日")),
+    (("ID", "製番"),          ("ID",     "製番")),
+    (("販売担当者", "年式"),    ("販売担当者", "年式")),
 ]
 # 単独行
 #   (notion_prop, display_label)
-LABEL_SINGLE_FIELDS = [
-    ("製番", "製番"),
-    ("販売担当者", "販売担当者"),
-]
+LABEL_SINGLE_FIELDS = []
 
 
 class LabelTab:
