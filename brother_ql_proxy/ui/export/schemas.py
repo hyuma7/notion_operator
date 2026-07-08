@@ -12,10 +12,10 @@ class SoldRecord(NotionRecord):
     """Represents a sold item record"""
     product_name: str = Field(alias="商品名", default="")
     sales_amount: float = Field(alias="売上金", default=0)
-    profit: float = Field(alias="純利益", default=0)
+    profit: float = Field(alias="販売利益", default=0)
     cost_price: float = Field(alias="仕入れ原価", default=0)
     commission: float = Field(alias="販売手数料", default=0)
-    shipping_cost: float = Field(alias="送料", default=0)
+    shipping_cost: float = Field(alias="配送料", default=0)
     
     sold_date: Optional[date] = Field(alias="売却日", default=None)
     sold_year_month: Optional[str] = None # Calculated field
@@ -126,11 +126,13 @@ class DailySoldRecord(NotionRecord):
     cost_price: Optional[float] = Field(alias="仕入れ原価", default=None)
     trunk_line_fee: Optional[float] = Field(alias="幹線便料金", default=None)
     promotion: Optional[float] = Field(alias="プロモーション", default=None)
-    shipping_cost: float = Field(alias="送料", default=0)
+    gross_profit: Optional[float] = Field(alias="粗利", default=None)
+    shipping_cost: float = Field(alias="配送料", default=0)
     shipping_method: str = Field(alias="送料計算方法", default="")
     commission: Optional[float] = Field(alias="販売手数料", default=None)
-    profit: Optional[float] = Field(alias="純利益", default=None)
+    profit: Optional[float] = Field(alias="販売利益", default=None)
     profit_rate: Optional[float] = Field(alias="利益率", default=None)
+    item_id: Optional[float] = Field(alias="商品ID", default=None)
     supplier: str = Field(alias="仕入れ先名", default="")
     purchase_date: Optional[date] = Field(alias="仕入れ日", default=None)
     sales_channel: str = Field(alias="販売媒体名", default="")
@@ -154,7 +156,7 @@ class DailySoldRecord(NotionRecord):
                 return 0.0
         return 0.0
 
-    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', 'trunk_line_fee', 'promotion', mode='before')
+    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', 'trunk_line_fee', 'promotion', 'gross_profit', 'item_id', mode='before')
     @classmethod
     def clean_optional_number(cls, v: Any) -> Optional[float]:
         if v is None or v == "":

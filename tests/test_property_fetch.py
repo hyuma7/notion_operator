@@ -375,10 +375,10 @@ class TestSoldRecordValidation:
         base = {
             "商品名": "テスト商品",
             "売上金": 15000,
-            "純利益": 3000,
+            "販売利益": 3000,
             "仕入れ原価": 8000,
             "販売手数料": 500,
-            "送料": 200,
+            "配送料": 200,
             "売却日": "2025-07-10",
             "仕入れ先名": "RE",
             "販売媒体名": "メルカリ1",
@@ -417,7 +417,7 @@ class TestSoldRecordValidation:
         assert record.sales_channel == "メルカリ1"
 
     def test_数値空欄は0になる(self):
-        flat = self._make_flat(**{"純利益": None, "販売手数料": ""})
+        flat = self._make_flat(**{"販売利益": None, "販売手数料": ""})
         record = SoldRecord(**flat)
         assert record.profit == 0.0
         assert record.commission == 0.0
@@ -503,10 +503,10 @@ class TestIntegrationFlattenToSoldRecord:
             props={
                 "商品名": title_prop("iPhone 15 Pro"),
                 "売上金": number_prop(120000),
-                "純利益": formula_number_prop(25000),
+                "販売利益": formula_number_prop(25000),
                 "仕入れ原価": formula_number_prop(80000),
                 "販売手数料": formula_number_prop(6000),
-                "送料": formula_number_prop(500),
+                "配送料": formula_number_prop(500),
                 "売却日": date_prop("2025-08-20"),
                 "在庫状況": status_prop("売却済み"),  # フィルタ用、スキーマ外
                 "仕入れ先名": rollup_formula_string_prop("RE"),
@@ -715,10 +715,10 @@ def _make_sold(month: str, **overrides) -> SoldRecord:
     base = {
         "商品名": "商品",
         "売上金": 10000,
-        "純利益": 2000,
+        "販売利益": 2000,
         "仕入れ原価": 6000,
         "販売手数料": 0,
-        "送料": 0,
+        "配送料": 0,
         "売却日": "2025-07-10",
         "仕入れ先名": "RE",
         "販売媒体名": "メルカリ1",

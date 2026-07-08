@@ -1042,8 +1042,8 @@ class ExportService:
             return None
 
         sales_columns = [
-            ("仕入れ日",       lambda r: r.purchase_date),
-            ("仕入れ先",       lambda r: r.supplier),
+            ("仕入日",         lambda r: r.purchase_date),
+            ("仕入先",         lambda r: r.supplier),
             ("メーカー",       lambda r: r.maker),
             ("商品名",         lambda r: r.product_name),
             ("型番",           lambda r: r.model_number),
@@ -1051,21 +1051,26 @@ class ExportService:
             ("製番",           lambda r: r.serial_number),
             ("販売媒体",       lambda r: r.sales_channel),
             ("作業担当",       lambda r: r.assignee),
+            ("販売日",         lambda r: r.sold_date),
             ("売上金",         lambda r: r.sales_amount),
-            ("仕入れ金",       lambda r: r.purchase_cost),
-            ("仕入れ手数料",   lambda r: r.purchase_fee),
-            ("仕入れ原価",     lambda r: r.cost_price),
+            ("仕入金",         lambda r: r.purchase_cost),
+            ("仕入手数料",     lambda r: r.purchase_fee),
+            ("仕入原価",       lambda r: r.cost_price),
+            ("粗利",           lambda r: r.gross_profit),
+            ("原価率",         cost_rate),
+            ("販売手数料",     lambda r: r.commission),
             ("幹線便料金",     lambda r: r.trunk_line_fee),
             ("プロモーション", lambda r: r.promotion),
-            ("送料",           lambda r: r.shipping_cost),
+            ("配送料",         lambda r: r.shipping_cost),
             ("送料計算方法",   lambda r: r.shipping_method),
-            ("販売手数料",     lambda r: r.commission),
             ("純利益",         lambda r: r.profit),
-            ("原価率",         cost_rate),
+            ("商品ID",         lambda r: int(r.item_id) if r.item_id is not None else None),
+            ("発送伝票番号",   lambda r: int(r.shipping_slip_number) if r.shipping_slip_number is not None else None),
+            ("購入者名",       lambda r: r.buyer_name),
         ]
         numeric_sales_cols = {
-            "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
-            "幹線便料金", "プロモーション", "送料", "販売手数料", "純利益",
+            "売上金", "仕入金", "仕入手数料", "仕入原価", "粗利",
+            "販売手数料", "幹線便料金", "プロモーション", "配送料", "純利益",
         }
 
         # ヘッダー行
@@ -1085,10 +1090,7 @@ class ExportService:
 
         # 合計行（SUBTOTAL: フィルタで絞り込んだ表示行だけを集計する）
         total_row = len(sales) + 2
-        numeric_totals = {
-            "売上金", "仕入れ金", "仕入れ手数料", "仕入れ原価",
-            "幹線便料金", "プロモーション", "送料", "販売手数料", "純利益",
-        }
+        numeric_totals = numeric_sales_cols
         for col_idx, (col_name, getter) in enumerate(sales_columns, 1):
             col_letter = ws_sales.cell(row=1, column=col_idx).column_letter
             data_range = f"{col_letter}2:{col_letter}{total_row - 1}"
