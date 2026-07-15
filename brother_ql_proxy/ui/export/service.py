@@ -7,6 +7,7 @@ from notion_client.errors import APIResponseError
 from typing import List, Dict, Any, Optional, Tuple, Callable
 from openpyxl import Workbook
 from openpyxl.styles import Font, Border, Side, Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 from .schemas import SoldRecord, PurchaseRecord, DailySoldRecord, DailyPurchaseRecord
 
 
@@ -450,7 +451,7 @@ class ExportService:
                     purchase_company_category_map.setdefault(row['supplier'], row['supplier_category'])
 
         # カテゴリ定義: 市場・業販 vs 小売り
-        wholesale_categories = {'市場', '業販', 'ネット'}  # 市場・業販カテゴリ
+        wholesale_categories = {'市場', '業販'}  # 市場・業販カテゴリ
         retail_categories = {'小売', '小売り'}  # 小売りカテゴリ
 
         # --- Pivot 1: Sales (販売媒体のみ) ---
@@ -487,6 +488,18 @@ class ExportService:
             if not df_retail.empty:
                 pivot_profit_retail = df_retail.pivot_table(index='sales_channel', columns='sold_year_month', values='profit', aggfunc='sum', fill_value=0)
 
+        # --- Pivot 2.5: Gross Profit 粗利 (販売媒体のみ) ---
+        pivot_gross_wholesale = pd.DataFrame()  # 市場・業販
+        pivot_gross_retail = pd.DataFrame()     # 小売り
+        if not df_sales.empty:
+            # 市場・業販の粗利
+            if not df_wholesale.empty:
+                pivot_gross_wholesale = df_wholesale.pivot_table(index='sales_channel', columns='sold_year_month', values='gross_profit', aggfunc='sum', fill_value=0)
+
+            # 小売りの粗利
+            if not df_retail.empty:
+                pivot_gross_retail = df_retail.pivot_table(index='sales_channel', columns='sold_year_month', values='gross_profit', aggfunc='sum', fill_value=0)
+
         # --- Pivot 3: Purchase Cost ---
         pivot_purchase = pd.DataFrame()
         if not df_purchases.empty:
@@ -496,7 +509,8 @@ class ExportService:
         all_pivots = [
             pivot_sales, pivot_profit, pivot_purchase,
             pivot_sales_wholesale, pivot_sales_retail,
-            pivot_profit_wholesale, pivot_profit_retail
+            pivot_profit_wholesale, pivot_profit_retail,
+            pivot_gross_wholesale, pivot_gross_retail
         ]
         for pivot in all_pivots:
             if not pivot.empty:
@@ -521,10 +535,11 @@ class ExportService:
         purchase_category_list = sorted([c for c in category_list if c not in retail_categories])
         category_purchase = self._aggregate_by_category(pivot_purchase, purchase_company_category_map, months, purchase_category_list, default_cat="その他")
 
-        # 市場・業販用のカテゴリ別集計（市場計、業販計、ネット計）
+        # 市場・業販用のカテゴリ別集計（市場計、業販計）
         wholesale_category_list = sorted([c for c in wholesale_categories if c in company_category_map.values()])
         category_sales_wholesale = self._aggregate_by_category(pivot_sales_wholesale, company_category_map, months, wholesale_category_list, default_cat=None)
         category_profit_wholesale = self._aggregate_by_category(pivot_profit_wholesale, company_category_map, months, wholesale_category_list, default_cat=None)
+        category_gross_wholesale = self._aggregate_by_category(pivot_gross_wholesale, company_category_map, months, wholesale_category_list, default_cat=None)
 
         return {
             'pivot_sales': pivot_sales,
@@ -534,6 +549,8 @@ class ExportService:
             'pivot_sales_retail': pivot_sales_retail,
             'pivot_profit_wholesale': pivot_profit_wholesale,
             'pivot_profit_retail': pivot_profit_retail,
+            'pivot_gross_wholesale': pivot_gross_wholesale,
+            'pivot_gross_retail': pivot_gross_retail,
             'company_category_map': company_category_map,
             'purchase_company_category_map': purchase_company_category_map,
             'category_sales': category_sales,
@@ -541,6 +558,7 @@ class ExportService:
             'category_purchase': category_purchase,
             'category_sales_wholesale': category_sales_wholesale,
             'category_profit_wholesale': category_profit_wholesale,
+            'category_gross_wholesale': category_gross_wholesale,
             'sales_records': df_sales,
             'purchase_records': df_purchases
         }
@@ -579,8 +597,9 @@ class ExportService:
         df_purchases = data.get('purchase_records')
         has_sales = df_sales is not None and not df_sales.empty
         has_purchases = df_purchases is not None and not df_purchases.empty
-        # 売上か仕入のどちらかがあれば全体合算ブロックを描画する
-        if has_sales or has_purchases:
+        # 全体合算は売上（売却レコード）ベースの項目のみなので、売上があれば描画する
+        # （仕入高行は廃止。仕入は「企業別仕入高」セクションで別途集計する）
+        if has_sales:
              ws.cell(row=current_row, column=1, value="全体合算").font = Font(bold=True, size=14)
              current_row += 1
 
@@ -594,9 +613,9 @@ class ExportService:
              ws.cell(row=current_row, column=len(months)+2, value="計").fill = header_fill
              current_row += 1
 
-             # 仕入高は仕入レコード（仕入れ日ベース）、その他は売却レコードから集計
-             summary_items = ["売上", "原価", "粗利", "販売手数料", "送料", "販売利益", "仕入高"]
-             # Calculate sums
+             # 全体合算は売却レコードから集計（仕入高は企業別仕入高セクションで別途集計）
+             summary_items = ["売上", "原価", "粗利", "販売手数料", "送料", "販売利益"]
+             # 生値を集計（粗利・販売利益は Excel 数式で算出するのでここでは計算しない）
              sums = {item: {m: 0.0 for m in months} for item in summary_items}
 
              if has_sales:
@@ -607,30 +626,51 @@ class ExportService:
                          sums["原価"][m] += row['cost_price']
                          sums["販売手数料"][m] += row['commission']
                          sums["送料"][m] += row['shipping_cost']
-                         sums["販売利益"][m] += row['profit']
-                         sums["粗利"][m] = sums["売上"][m] - sums["原価"][m]
 
-             if has_purchases:
-                 for _, row in df_purchases.iterrows():
-                     m = row['purchase_year_month']
-                     if m in months:
-                         sums["仕入高"][m] += row['cost_price']
+             # 行名 → 行番号を先に確定させ、粗利・販売利益を他行を参照する数式にする
+             item_rows = {item: current_row + idx for idx, item in enumerate(summary_items)}
+             first_month_col = get_column_letter(2)
+             last_month_col = get_column_letter(len(months) + 1)
 
              for item in summary_items:
-                 ws.cell(row=current_row, column=1, value=item).fill = total_fill
-                 total = 0
+                 r = item_rows[item]
+                 ws.cell(row=r, column=1, value=item).fill = total_fill
                  for i, m in enumerate(months, 2):
-                     val = sums[item][m]
-                     c = ws.cell(row=current_row, column=i, value=val)
+                     col = get_column_letter(i)
+                     if item == "粗利":
+                         # 粗利 = 売上 − 原価
+                         value = f"={col}{item_rows['売上']}-{col}{item_rows['原価']}"
+                     elif item == "販売利益":
+                         # 販売利益 = 粗利 − 販売手数料 − 送料
+                         value = (
+                             f"={col}{item_rows['粗利']}"
+                             f"-{col}{item_rows['販売手数料']}"
+                             f"-{col}{item_rows['送料']}"
+                         )
+                     else:
+                         value = sums[item][m]
+                     c = ws.cell(row=r, column=i, value=value)
                      c.number_format = '#,##0'
                      c.fill = total_fill
-                     total += val
-                 ws.cell(row=current_row, column=len(months)+2, value=total).number_format = '#,##0'
-                 current_row += 1
-             
+                 # 「計」列は各月セルの合計を数式で
+                 c_total = ws.cell(
+                     row=r,
+                     column=len(months) + 2,
+                     value=f"=SUM({first_month_col}{r}:{last_month_col}{r})",
+                 )
+                 c_total.number_format = '#,##0'
+                 c_total.fill = total_fill
+
+             current_row = item_rows[summary_items[-1]] + 1
              current_row += 1
 
         # 2. Pivot Sections - 4分割（市場・業販 / 小売り）+ 仕入高
+        # 粗利セクション（pivot_gross_wholesale / pivot_gross_retail）は
+        # process_pivot_data で計算済みだが、シート出力は現状見送り。
+        # 再有効化するには各販売利益セクションの直前に
+        #   ("企業別粗利(市場・業販)", data.get('pivot_gross_wholesale'), data.get('category_gross_wholesale')),
+        #   ("企業別粗利(小売り)", data.get('pivot_gross_retail'), None),
+        # を追加する（詳細は docs/EXCEL_EXPORT.md）。
         sections = [
             ("企業別売上(市場・業販)", data.get('pivot_sales_wholesale'), data.get('category_sales_wholesale')),
             ("企業別販売利益(市場・業販)", data.get('pivot_profit_wholesale'), data.get('category_profit_wholesale')),
@@ -641,7 +681,7 @@ class ExportService:
 
         # Assignee mapping - 販売担当者（ロールアップ）を使用してカテゴリごとに分離
         # カテゴリ定義
-        wholesale_categories = {'市場', '業販', 'ネット'}  # 市場・業販カテゴリ
+        wholesale_categories = {'市場', '業販'}  # 市場・業販カテゴリ
         retail_categories = {'小売', '小売り'}  # 小売りカテゴリ
 
         # 市場・業販用：担当者マッピング
@@ -678,6 +718,14 @@ class ExportService:
             PatternFill(start_color="FFFFE6", end_color="FFFFE6", fill_type="solid"),
         ]
 
+        # 各セクションの「計」列に使う月セル範囲の列文字（先頭月〜最終月）
+        sec_first_col = get_column_letter(2)
+        sec_last_col = get_column_letter(len(months) + 1)
+
+        def sum_formula(r: int) -> str:
+            """指定行の先頭月〜最終月セルを合計する数式を返す"""
+            return f"=SUM({sec_first_col}{r}:{sec_last_col}{r})"
+
         for title, pivot, cats in sections:
             if pivot is None or pivot.empty:
                 continue
@@ -711,8 +759,8 @@ class ExportService:
                     category_map_for_section = data.get('company_category_map', {})
                 used_companies = set()
 
-                # カテゴリ順序を定義（市場、ネット、業販、その他）
-                category_order = ['市場', 'ネット', '業販', 'その他']
+                # カテゴリ順序を定義（市場、業販、その他）
+                category_order = ['市場', '業販', 'その他']
                 sorted_cats = sorted(cats.items(), key=lambda x: category_order.index(x[0]) if x[0] in category_order else 999)
 
                 for cat_name, cat_vals in sorted_cats:
@@ -722,28 +770,24 @@ class ExportService:
                         if company_cat == cat_name and company not in used_companies:
                             used_companies.add(company)
                             ws.cell(row=current_row, column=1, value=company)
-                            row_total = 0
                             for i, m in enumerate(months, 2):
                                 val = pivot.loc[company, m] if m in pivot.columns else 0
                                 c = ws.cell(row=current_row, column=i, value=val)
                                 c.number_format = '#,##0'
-                                row_total += val
-                            ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
+                            ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row)).number_format = '#,##0'
                             current_row += 1
 
                     # カテゴリ小計を後に出力
                     c_label = ws.cell(row=current_row, column=1, value=f"{cat_name}計")
                     c_label.fill = category_fill
                     c_label.font = bold_font
-                    row_total = 0
                     for i, m in enumerate(months, 2):
                         val = cat_vals.get(m, 0)
                         c = ws.cell(row=current_row, column=i, value=val)
                         c.number_format = '#,##0'
                         c.fill = category_fill
                         c.font = bold_font
-                        row_total += val
-                    c_total = ws.cell(row=current_row, column=len(months)+2, value=row_total)
+                    c_total = ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row))
                     c_total.fill = category_fill
                     c_total.font = bold_font
                     c_total.number_format = '#,##0'
@@ -770,15 +814,13 @@ class ExportService:
                             c_label = ws.cell(row=current_row, column=1, value=label)
                             c_label.fill = fill
                             c_label.font = bold_font
-                            grand_subtotal = 0
                             for i, m in enumerate(months, 2):
                                 val = subtotal[m]
                                 c = ws.cell(row=current_row, column=i, value=val)
                                 c.number_format = '#,##0'
                                 c.fill = fill
                                 c.font = bold_font
-                                grand_subtotal += val
-                            c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_subtotal)
+                            c_total = ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row))
                             c_total.fill = fill
                             c_total.font = bold_font
                             c_total.number_format = '#,##0'
@@ -800,15 +842,13 @@ class ExportService:
                                 has_rows = True
                                 used_companies.add(company)
                                 ws.cell(row=current_row, column=1, value=company)
-                                row_total = 0
                                 for i, m in enumerate(months, 2):
                                     val = pivot.loc[company, m] if m in pivot.columns else 0
                                     c = ws.cell(row=current_row, column=i, value=val)
                                     c.number_format = '#,##0'
-                                    row_total += val
                                     subtotal[m] += val
 
-                                ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
+                                ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row)).number_format = '#,##0'
                                 current_row += 1
 
                         if has_rows:
@@ -817,15 +857,13 @@ class ExportService:
                             c_label = ws.cell(row=current_row, column=1, value=label)
                             c_label.fill = fill
                             c_label.font = bold_font
-                            grand_subtotal = 0
                             for i, m in enumerate(months, 2):
                                 val = subtotal[m]
                                 c = ws.cell(row=current_row, column=i, value=val)
                                 c.number_format = '#,##0'
                                 c.fill = fill
                                 c.font = bold_font
-                                grand_subtotal += val
-                            c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_subtotal)
+                            c_total = ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row))
                             c_total.fill = fill
                             c_total.font = bold_font
                             c_total.number_format = '#,##0'
@@ -835,13 +873,11 @@ class ExportService:
                 remaining = [c for c in pivot.index if c not in used_companies]
                 for company in remaining:
                     ws.cell(row=current_row, column=1, value=company)
-                    row_total = 0
                     for i, m in enumerate(months, 2):
                         val = pivot.loc[company, m] if m in pivot.columns else 0
                         c = ws.cell(row=current_row, column=i, value=val)
                         c.number_format = '#,##0'
-                        row_total += val
-                    ws.cell(row=current_row, column=len(months)+2, value=row_total).number_format = '#,##0'
+                    ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row)).number_format = '#,##0'
                     current_row += 1
 
                 # Category Totals (カテゴリ別小計) - 仕入高以外
@@ -850,15 +886,13 @@ class ExportService:
                         c_label = ws.cell(row=current_row, column=1, value=f"{cat_name}計")
                         c_label.fill = category_fill
                         c_label.font = bold_font
-                        row_total = 0
                         for i, m in enumerate(months, 2):
                             val = cat_vals.get(m, 0)
                             c = ws.cell(row=current_row, column=i, value=val)
                             c.number_format = '#,##0'
                             c.fill = category_fill
                             c.font = bold_font
-                            row_total += val
-                        c_total = ws.cell(row=current_row, column=len(months)+2, value=row_total)
+                        c_total = ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row))
                         c_total.fill = category_fill
                         c_total.font = bold_font
                         c_total.number_format = '#,##0'
@@ -868,15 +902,13 @@ class ExportService:
             c_label = ws.cell(row=current_row, column=1, value="合計")
             c_label.fill = total_fill
             c_label.font = bold_font
-            grand_row_total = 0
             for i, m in enumerate(months, 2):
                 col_sum = pivot[m].sum() if m in pivot.columns else 0
                 c = ws.cell(row=current_row, column=i, value=col_sum)
                 c.number_format = '#,##0'
                 c.fill = total_fill
                 c.font = bold_font
-                grand_row_total += col_sum
-            c_total = ws.cell(row=current_row, column=len(months)+2, value=grand_row_total)
+            c_total = ws.cell(row=current_row, column=len(months)+2, value=sum_formula(current_row))
             c_total.fill = total_fill
             c_total.font = bold_font
             c_total.number_format = '#,##0'

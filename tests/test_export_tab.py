@@ -17,6 +17,10 @@ from brother_ql_proxy.ui.export.ui import (
     ExportTab,
     _build_daily_excel_filename,
 )
+from brother_ql_proxy.ui.export.service import ExportService
+from brother_ql_proxy.ui.export.schemas import (
+    SoldRecord, PurchaseRecord, DailySoldRecord, DailyPurchaseRecord,
+)
 from brother_ql_proxy.ui.file_save import (
     set_saved_file_status,
     should_save_directly,
@@ -378,6 +382,197 @@ class TestDailyExcelExport(unittest.TestCase):
             self.assertIsNotNone(page.snack_bar)
             self.assertIn("ファイルを保存しました。", tab.daily_result_text.value)
             self.assertIsNotNone(tab.daily_result_text.spans)
+
+
+class TestGrossProfitSection(unittest.TestCase):
+    """全体合算の数式化・仕入高行の廃止・粗利セクション非出力のテスト"""
+
+    def _make_sold(self, month_date, channel, category, sales, cost, gross, profit,
+                   commission=0, shipping=0, assignee="担当A"):
+        rec = SoldRecord(**{
+            "商品名": "テスト商品",
+            "売上金": sales,
+            "販売利益": profit,
+            "粗利": gross,
+            "仕入れ原価": cost,
+            "販売手数料": commission,
+            "配送料": shipping,
+            "売却日": month_date,
+            "販売媒体名": channel,
+            "販売先カテゴリ": category,
+            "販売担当者": assignee,
+        })
+        dt = pd.to_datetime(month_date)
+        rec.sold_year_month = f"{dt.year}年{dt.month}月"
+        return rec
+
+    def _build_data(self):
+        months = ["2026年6月", "2026年7月"]
+        sales = [
+            # 市場・業販
+            self._make_sold("2026-06-10", "市場A", "市場", 30000, 10000, 20000, 17000,
+                            commission=2000, shipping=1000),
+            self._make_sold("2026-07-05", "業販B", "業販", 20000, 8000, 12000, 10500,
+                            commission=1000, shipping=500),
+            # 小売り
+            self._make_sold("2026-06-20", "メルカリ", "小売", 15000, 6000, 9000, 7500,
+                            commission=1200, shipping=300),
+        ]
+        purchases = [
+            PurchaseRecord(**{
+                "仕入れ原価": 12000,
+                "仕入れ先名": "仕入先X",
+                "仕入先カテゴリ": "市場",
+                "仕入れ日": "2026-06-01",
+            })
+        ]
+        purchases[0].purchase_year_month = "2026年6月"
+
+        service = ExportService(api_key="", database_id="")
+        data = service.process_pivot_data(sales, purchases, months)
+        return service, data, months
+
+    def test_process_pivot_includes_gross_pivots(self):
+        """process_pivot_data は粗利ピボットを計算し続ける（将来の再有効化用に返り値は残す）"""
+        _, data, _ = self._build_data()
+        self.assertIn('pivot_gross_wholesale', data)
+        self.assertIn('pivot_gross_retail', data)
+        self.assertIn('category_gross_wholesale', data)
+        self.assertFalse(data['pivot_gross_wholesale'].empty)
+        self.assertFalse(data['pivot_gross_retail'].empty)
+
+    def _label_rows(self, path):
+        """生成 Excel のラベル(A列) → 行番号のマップを返す"""
+        from openpyxl import load_workbook
+
+        wb = load_workbook(path)
+        ws = wb.active
+        label_rows = {}
+        for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+            if row and row[0]:
+                label_rows.setdefault(row[0], row_idx)
+        return ws, label_rows
+
+    def test_gross_sections_not_output(self):
+        """企業別粗利セクションはシートに出力されない（計算は残すが出力は見送り）"""
+        service, data, months = self._build_data()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = os.path.join(tmpdir, "summary.xlsx")
+            service.generate_excel(out, data, months)
+            _, label_rows = self._label_rows(out)
+
+            self.assertNotIn("企業別粗利(市場・業販)", label_rows)
+            self.assertNotIn("企業別粗利(小売り)", label_rows)
+
+    def test_summary_has_no_purchase_row(self):
+        """全体合算に「仕入高」行が無い（企業別仕入高セクションは存在する）"""
+        service, data, months = self._build_data()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = os.path.join(tmpdir, "summary.xlsx")
+            service.generate_excel(out, data, months)
+            _, label_rows = self._label_rows(out)
+
+            self.assertNotIn("仕入高", label_rows)
+            self.assertIn("企業別仕入高", label_rows)
+
+    def test_summary_formulas_in_excel(self):
+        """全体合算の粗利・販売利益・計列が Excel 数式になっている"""
+        service, data, months = self._build_data()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = os.path.join(tmpdir, "summary.xlsx")
+            service.generate_excel(out, data, months)
+            ws, label_rows = self._label_rows(out)
+
+            # 全体合算の「粗利」行が数式（売上-原価）になっている
+            gross_row = label_rows["粗利"]
+            gross_cell = ws.cell(row=gross_row, column=2).value
+            self.assertTrue(str(gross_cell).startswith("="), "粗利セルが数式でない")
+            self.assertIn("-", str(gross_cell))
+
+            # 全体合算の「販売利益」行が数式（粗利-手数料-送料）になっている
+            profit_row = label_rows["販売利益"]
+            profit_cell = ws.cell(row=profit_row, column=2).value
+            self.assertTrue(str(profit_cell).startswith("="), "販売利益セルが数式でない")
+            self.assertEqual(str(profit_cell).count("-"), 2, "販売利益は3項の引き算になる")
+
+            # 「計」列（最右列 = len(months)+2）が SUM 数式
+            total_cell = ws.cell(row=gross_row, column=len(months) + 2).value
+            self.assertTrue(str(total_cell).startswith("=SUM("), "計列がSUM数式でない")
+
+
+class TestRelationDoubleLinkNormalization(unittest.TestCase):
+    """relation 二重リンクで rollup が複数値を ", " join した場合の先頭値採用テスト"""
+
+    def test_sold_supplier_takes_first_value(self):
+        """SoldRecord の仕入れ先名が "RE, REO" のとき先頭値 "RE" を採用する"""
+        rec = SoldRecord(**{"商品名": "ドラム式洗濯機", "仕入れ先名": "RE, REO"})
+        self.assertEqual(rec.supplier, "RE")
+
+    def test_sold_sales_channel_takes_first_value(self):
+        """SoldRecord の販売媒体名が複数値のとき先頭値を採用する"""
+        rec = SoldRecord(**{"商品名": "商品", "販売媒体名": "メルカリ1, メルカリ2"})
+        self.assertEqual(rec.sales_channel, "メルカリ1")
+
+    def test_sold_category_takes_first_value(self):
+        """SoldRecord のカテゴリが "ネット, ネット" のとき "ネット" を採用する"""
+        rec = SoldRecord(**{"商品名": "商品", "仕入先カテゴリ": "ネット, ネット"})
+        self.assertEqual(rec.supplier_category, "ネット")
+
+    def test_purchase_supplier_takes_first_value(self):
+        """PurchaseRecord の仕入れ先名が "RE, REO" のとき先頭値 "RE" を採用する"""
+        rec = PurchaseRecord(**{"仕入れ先名": "RE, REO", "仕入先カテゴリ": "ネット, ネット"})
+        self.assertEqual(rec.supplier, "RE")
+        self.assertEqual(rec.supplier_category, "ネット")
+
+    def test_url_and_comma_combined(self):
+        """URL 除去後にカンマが残っても先頭値を採用する"""
+        rec = SoldRecord(**{
+            "商品名": "商品",
+            "仕入れ先名": "RE (https://example.com), REO (https://example.com)",
+        })
+        self.assertEqual(rec.supplier, "RE")
+
+    def test_daily_sold_supplier_and_sales_channel_take_first_value(self):
+        """DailySoldRecord の仕入れ先名・販売媒体名が複数値のとき先頭値を採用する"""
+        rec = DailySoldRecord(**{
+            "商品名": "ドラム式洗濯機",
+            "仕入れ先名": "RE, REO",
+            "販売媒体名": "メルカリ1, メルカリ2",
+        })
+        self.assertEqual(rec.supplier, "RE")
+        self.assertEqual(rec.sales_channel, "メルカリ1")
+
+    def test_daily_sold_model_number_and_maker_take_first_value(self):
+        """DailySoldRecord の型番名・メーカーが複数値のとき先頭値を採用する"""
+        rec = DailySoldRecord(**{
+            "商品名": "ドラム式洗濯機",
+            "型番名": "AA-1, AA-2",
+            "メーカー": "パナソニック, シャープ",
+        })
+        self.assertEqual(rec.model_number, "AA-1")
+        self.assertEqual(rec.maker, "パナソニック")
+
+    def test_daily_purchase_supplier_and_category_take_first_value(self):
+        """DailyPurchaseRecord の仕入れ先名・仕入先カテゴリが複数値のとき先頭値を採用する"""
+        rec = DailyPurchaseRecord(**{
+            "仕入れ先名": "RE, REO",
+            "仕入先カテゴリ": "ネット, ネット",
+        })
+        self.assertEqual(rec.supplier, "RE")
+        self.assertEqual(rec.supplier_category, "ネット")
+
+    def test_daily_purchase_model_number_maker_category_size_take_first_value(self):
+        """DailyPurchaseRecord の型番名・メーカー・カテゴリー・サイズが複数値のとき先頭値を採用する"""
+        rec = DailyPurchaseRecord(**{
+            "型番名": "AA-1, AA-2",
+            "メーカー": "パナソニック, シャープ",
+            "カテゴリー": "家電, 家具",
+            "サイズ": "大, 小",
+        })
+        self.assertEqual(rec.model_number, "AA-1")
+        self.assertEqual(rec.maker, "パナソニック")
+        self.assertEqual(rec.category, "家電")
+        self.assertEqual(rec.size, "大")
 
 
 if __name__ == '__main__':

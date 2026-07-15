@@ -13,6 +13,7 @@ class SoldRecord(NotionRecord):
     product_name: str = Field(alias="商品名", default="")
     sales_amount: float = Field(alias="売上金", default=0)
     profit: float = Field(alias="販売利益", default=0)
+    gross_profit: float = Field(alias="粗利", default=0)
     cost_price: float = Field(alias="仕入れ原価", default=0)
     commission: float = Field(alias="販売手数料", default=0)
     shipping_cost: float = Field(alias="配送料", default=0)
@@ -29,7 +30,7 @@ class SoldRecord(NotionRecord):
     assignee: Optional[str] = Field(alias="作業担当", default=None)
     sales_assignee: Optional[str] = Field(alias="販売担当者", default=None)  # ロールアップ
 
-    @field_validator('sales_amount', 'profit', 'cost_price', 'commission', 'shipping_cost', mode='before')
+    @field_validator('sales_amount', 'profit', 'gross_profit', 'cost_price', 'commission', 'shipping_cost', mode='before')
     @classmethod
     def clean_currency(cls, v: Any) -> float:
         if v is None or v == "":
@@ -53,7 +54,12 @@ class SoldRecord(NotionRecord):
         if isinstance(v, str):
              # Remove URL part if exists: "Name (https://...)"
             value = re.sub(r'\s*\(https://.*?\)', '', v)
-            return value.strip()
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            if "," in value:
+                value = value.split(",")[0]
+            value = value.strip()
+            return value if value else "不明"
         return str(v).strip()
 
     @field_validator('supplier_category', 'sales_channel_category', mode='before')
@@ -63,6 +69,10 @@ class SoldRecord(NotionRecord):
             return "その他"
         # Notionから取得できた値をそのまま使用
         v_str = str(v).strip()
+        # relation の二重リンク等で複数値が ", " join された場合は先頭値のみ
+        # （例: "ネット, ネット" → "ネット"）
+        if "," in v_str:
+            v_str = v_str.split(",")[0].strip()
         return v_str if v_str else "その他"
 
 class PurchaseRecord(NotionRecord):
@@ -97,7 +107,12 @@ class PurchaseRecord(NotionRecord):
             return "不明"
         if isinstance(v, str):
             value = re.sub(r'\s*\(https://.*?\)', '', v)
-            return value.strip()
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            if "," in value:
+                value = value.split(",")[0]
+            value = value.strip()
+            return value if value else "不明"
         return str(v).strip()
 
     @field_validator('supplier_category', mode='before')
@@ -107,6 +122,10 @@ class PurchaseRecord(NotionRecord):
             return "その他"
         # Notionから取得できた値をそのまま使用
         v_str = str(v).strip()
+        # relation の二重リンク等で複数値が ", " join された場合は先頭値のみ
+        # （例: "ネット, ネット" → "ネット"）
+        if "," in v_str:
+            v_str = v_str.split(",")[0].strip()
         return v_str if v_str else "その他"
 
 
@@ -171,6 +190,15 @@ class DailySoldRecord(NotionRecord):
                 return None
         return None
 
+    @field_validator('supplier', 'sales_channel', 'model_number', 'maker', mode='before')
+    @classmethod
+    def clean_relation_rollup(cls, v: Any) -> Any:
+        if isinstance(v, str) and "," in v:
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            v = v.split(",")[0].strip()
+        return v
+
 
 class DailyPurchaseRecord(NotionRecord):
     """日別出力用 仕入れレコード"""
@@ -223,3 +251,12 @@ class DailyPurchaseRecord(NotionRecord):
             except ValueError:
                 return None
         return None
+
+    @field_validator('supplier', 'supplier_category', 'model_number', 'maker', 'category', 'size', mode='before')
+    @classmethod
+    def clean_relation_rollup(cls, v: Any) -> Any:
+        if isinstance(v, str) and "," in v:
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            v = v.split(",")[0].strip()
+        return v
