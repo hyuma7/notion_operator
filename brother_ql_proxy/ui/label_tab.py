@@ -10,7 +10,7 @@ import flet as ft
 
 from notion.fetch_page import fetch_recent_items, search_items, fetch_all_properties
 from brother_ql_proxy.notion import LabelPreviewGenerator
-from brother_ql_proxy.utils import convert_to_brother_format
+from brother_ql_proxy.utils import print_label
 
 # ラベルに出力するフィールド定義（修正点その2）
 # ペア: 同じ行に「左値 : 右値」で表示
@@ -98,6 +98,8 @@ class LabelTab:
             disabled=True,
         )
         self.print_status = ft.Text("", size=13)
+        # フォールバック（CLI方式）で印刷したときだけ表示する小さな注記
+        self.fallback_note = ft.Text("", size=11, color=ft.Colors.GREY, visible=False)
 
         # ── フォントサイズ設定 ─────────────────────────────────────
         _font_size = self.proxy.config.get('font_size', 16)
@@ -183,6 +185,7 @@ class LabelTab:
                 # 印刷・プレビュー
                 ft.Row([self.print_btn, self.preview_btn, self.print_status],
                        spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.fallback_note,
                 self.preview_status,
                 self.preview_img,
             ],
@@ -404,6 +407,8 @@ class LabelTab:
         self.print_btn.disabled = True
         self.print_status.value = "印刷中..."
         self.print_status.color = ft.Colors.BLUE
+        self.fallback_note.visible = False
+        self.fallback_note.value = ""
         self.page.update()
 
         def do():
@@ -431,15 +436,23 @@ class LabelTab:
                     qr_size_scale=int(self.qr_size_slider.value),
                     auto_extend_height=False,
                 )
-                raster = convert_to_brother_format(img, label_size)
-                success = self.proxy.send_raw_data_to_printer(raster)
+                result = print_label(img, label_size, self.proxy)
+                success = result.get("success")
+                used_fallback = result.get("used_fallback")
+                error = result.get("error")
 
                 def on_ok():
                     if success:
                         self.print_status.value = "印刷完了"
                         self.print_status.color = ft.Colors.GREEN
+                        if used_fallback:
+                            self.fallback_note.value = "フォールバックで実行しました"
+                            self.fallback_note.visible = True
+                        else:
+                            self.fallback_note.value = ""
+                            self.fallback_note.visible = False
                     else:
-                        self.print_status.value = "印刷失敗"
+                        self.print_status.value = f"印刷失敗: {error}" if error else "印刷失敗"
                         self.print_status.color = ft.Colors.RED
                     self.page.update()
 

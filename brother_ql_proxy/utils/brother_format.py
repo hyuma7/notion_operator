@@ -46,6 +46,73 @@ def create_simple_test_label(text: str = "TEST") -> bytes:
     return convert_to_brother_format(image, '62x29')
 
 
+def print_label(image: PILImage.Image, label_size: str, proxy) -> dict:
+    """ラベルを印刷する。
+
+    ライブラリ経路（brother_ql を直接利用）を優先し、失敗時は従来の CLI 方式へ
+    フォールバックする。
+
+    Args:
+        image: 印刷する PIL 画像
+        label_size: ラベルサイズ（'62' や '62x29' 形式。幅の数値のみ使用）
+        proxy: PrinterProxy インスタンス（config / log / send_raw_data_to_printer を持つ）
+
+    Returns:
+        {"success": bool, "used_fallback": bool, "error": str | None}
+    """
+    # ── ライブラリ経路（優先） ─────────────────────────────────────
+    try:
+        # import も含めて失敗はフォールバック対象にする
+        from brother_ql.raster import BrotherQLRaster
+        from brother_ql.conversion import convert
+
+        # CLI と同じ正規化: '62x29' → '62'
+        label_size_num = label_size.split('x')[0] if 'x' in label_size else label_size
+        printer_model = proxy.config.get('printer_model', 'QL-820NWB')
+
+        proxy.log(
+            f"ライブラリ経路で印刷開始: model={printer_model}, label={label_size_num}"
+        )
+
+        qlr = BrotherQLRaster(printer_model)
+        raster = convert(
+            qlr=qlr,
+            images=[image],
+            label=label_size_num,
+            rotate='auto',
+            threshold=70.0,
+            dither=False,
+            compress=False,
+            red=False,
+            dpi_600=False,
+            hq=True,
+            cut=True,
+        )
+
+        if proxy.send_raw_data_to_printer(raster):
+            proxy.log("✅ ライブラリ経路で印刷成功")
+            return {"success": True, "used_fallback": False, "error": None}
+
+        # 送信失敗はフォールバックへ
+        raise Exception("ライブラリ経路でのプリンター送信に失敗しました")
+
+    except Exception as lib_err:
+        proxy.log(
+            f"ライブラリ経路が失敗したため CLI 方式にフォールバックします: {lib_err}",
+            "WARNING",
+        )
+
+    # ── フォールバック経路（従来の CLI 方式） ──────────────────────
+    try:
+        raster = convert_to_brother_format(image, label_size)
+        success = proxy.send_raw_data_to_printer(raster)
+        if success:
+            return {"success": True, "used_fallback": True, "error": None}
+        return {"success": False, "used_fallback": True, "error": "CLI 方式の印刷に失敗しました"}
+    except Exception as cli_err:
+        return {"success": False, "used_fallback": True, "error": str(cli_err)}
+
+
 def convert_to_brother_format(image: PILImage.Image, label_size: str) -> bytes:
     """画像をbrother_ql CLIで印刷し、成功したかを返す（バイト数は参考値）"""
     
