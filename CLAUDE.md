@@ -49,6 +49,7 @@ git push origin main
 
 ## 開発メモ
 
+- ラベル印刷はライブラリ優先→CLIフォールバックの2段構え。詳細は [docs/LABEL_PRINTING.md](docs/LABEL_PRINTING.md)
 - テスト: `uv run --with pytest pytest tests/ -q`（コミット前に全通過を確認）
 - ローカル起動: `uv run python main.py`
 - ビルド済みアプリの設定・ログ: `~/Library/Application Support/Notion Operator/`（mac）

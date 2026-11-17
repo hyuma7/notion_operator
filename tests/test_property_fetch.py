@@ -375,10 +375,10 @@ class TestSoldRecordValidation:
         base = {
             "商品名": "テスト商品",
             "売上金": 15000,
-            "純利益": 3000,
+            "販売利益": 3000,
             "仕入れ原価": 8000,
             "販売手数料": 500,
-            "送料": 200,
+            "配送料": 200,
             "売却日": "2025-07-10",
             "仕入れ先名": "RE",
             "販売媒体名": "メルカリ1",
@@ -417,7 +417,7 @@ class TestSoldRecordValidation:
         assert record.sales_channel == "メルカリ1"
 
     def test_数値空欄は0になる(self):
-        flat = self._make_flat(**{"純利益": None, "販売手数料": ""})
+        flat = self._make_flat(**{"販売利益": None, "販売手数料": ""})
         record = SoldRecord(**flat)
         assert record.profit == 0.0
         assert record.commission == 0.0
@@ -503,10 +503,10 @@ class TestIntegrationFlattenToSoldRecord:
             props={
                 "商品名": title_prop("iPhone 15 Pro"),
                 "売上金": number_prop(120000),
-                "純利益": formula_number_prop(25000),
+                "販売利益": formula_number_prop(25000),
                 "仕入れ原価": formula_number_prop(80000),
                 "販売手数料": formula_number_prop(6000),
-                "送料": formula_number_prop(500),
+                "配送料": formula_number_prop(500),
                 "売却日": date_prop("2025-08-20"),
                 "在庫状況": status_prop("売却済み"),  # フィルタ用、スキーマ外
                 "仕入れ先名": rollup_formula_string_prop("RE"),
@@ -715,10 +715,10 @@ def _make_sold(month: str, **overrides) -> SoldRecord:
     base = {
         "商品名": "商品",
         "売上金": 10000,
-        "純利益": 2000,
+        "販売利益": 2000,
         "仕入れ原価": 6000,
         "販売手数料": 0,
-        "送料": 0,
+        "配送料": 0,
         "売却日": "2025-07-10",
         "仕入れ先名": "RE",
         "販売媒体名": "メルカリ1",
@@ -754,21 +754,24 @@ class TestPivotFallbackRemoved:
 
 
 # ─────────────────────────────────────────────
-# 16. generate_excel: 全体合算に「仕入高」行
+# 16. generate_excel: 全体合算から「仕入高」行を廃止
+#     （仕入は「企業別仕入高」セクションで集計する）
 # ─────────────────────────────────────────────
 
 class TestSummaryPurchaseRow:
-    def _read_summary_row(self, path, label, months):
+    def _labels(self, path):
+        """A列ラベルの集合を返す"""
         from openpyxl import load_workbook
         wb = load_workbook(path)
         ws = wb.active
+        labels = set()
         for row in ws.iter_rows(values_only=True):
-            if row and row[0] == label:
-                # col0=ラベル, col1..=各月, 最終列=計
-                return list(row[1:1 + len(months)]), row[1 + len(months)]
-        return None, None
+            if row and row[0]:
+                labels.add(row[0])
+        return labels
 
-    def test_仕入高行が仕入レコードの月別合計と一致(self, service, tmp_path):
+    def test_全体合算に仕入高行が無い(self, service, tmp_path):
+        """全体合算から仕入高行は廃止。企業別仕入高セクションは存続する"""
         months = ["2025年7月", "2025年8月"]
         sold = _make_sold("2025年7月")
         purchases = [
@@ -779,21 +782,27 @@ class TestSummaryPurchaseRow:
         out = tmp_path / "summary.xlsx"
         service.generate_excel(str(out), data, months)
 
-        monthly, total = self._read_summary_row(out, "仕入高", months)
-        assert monthly is not None, "仕入高行が出力されていない"
-        assert monthly == [8000, 0]
-        assert total == 8000
+        labels = self._labels(out)
+        # 全体合算の「仕入高」行は無い
+        assert "仕入高" not in labels
+        # 全体合算ブロックそのものは存在（売上ベースの項目）
+        assert "全体合算" in labels
+        assert "売上" in labels
+        # 企業別仕入高セクションは存続
+        assert "企業別仕入高" in labels
 
-    def test_売上0件でも仕入高行が描画される(self, service, tmp_path):
+    def test_売上0件なら全体合算は描画されず仕入高セクションのみ(self, service, tmp_path):
+        """売上0件だと全体合算ブロックは描画されないが、企業別仕入高は出力される"""
         months = ["2025年7月"]
         purchases = [_make_purchase("2025年7月", 4000)]
         data = service.process_pivot_data([], purchases, months)
         out = tmp_path / "summary_only_purchase.xlsx"
         service.generate_excel(str(out), data, months)
 
-        monthly, total = self._read_summary_row(out, "仕入高", months)
-        assert monthly == [4000]
-        assert total == 4000
+        labels = self._labels(out)
+        assert "全体合算" not in labels
+        assert "仕入高" not in labels
+        assert "企業別仕入高" in labels
 
 
 if __name__ == "__main__":

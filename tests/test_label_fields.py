@@ -194,8 +194,10 @@ class TestBuildPrintableFields:
             "型番名 ":     rollup_title("4T-C50EJ1"),   # Notion側にスペースあり
             "仕入れ先名":  rollup_formula_str("RE"),
             "仕入れ日":   date_val("2024-03-15"),
+            "ID":         {"type": "unique_id", "value": "PDT-42"},
             "製番":       rich_text_val("SN-12345"),
             "販売担当者":  rollup_formula_str("齊藤光"),
+            "年式":       rich_text_val("2020"),
         }
 
     def test_全フィールドが揃う場合(self, helper):
@@ -208,11 +210,11 @@ class TestBuildPrintableFields:
         assert fields[1]["name"] == "仕入先 / 仕入れ日"
         assert fields[1]["value"] == "RE  :  2024-03-15"
 
-        assert fields[2]["name"] == "製番"
-        assert fields[2]["value"] == "SN-12345"
+        assert fields[2]["name"] == "ID / 製番"
+        assert fields[2]["value"] == "PDT-42  :  SN-12345"
 
-        assert fields[3]["name"] == "販売担当者"
-        assert fields[3]["value"] == "齊藤光"
+        assert fields[3]["name"] == "販売担当者 / 年式"
+        assert fields[3]["value"] == "齊藤光  :  2020"
 
     def test_型番名が空でもメーカーだけ表示(self, helper):
         props = self._full_props()
@@ -221,12 +223,20 @@ class TestBuildPrintableFields:
         メーカー行 = next(f for f in fields if "メーカー" in f["name"])
         assert メーカー行["value"] == "SHARP"
 
-    def test_販売担当者が空の場合は行なし(self, helper):
+    def test_販売担当者が空でも年式だけ表示(self, helper):
         props = self._full_props()
         props["販売担当者"] = {"type": "rollup", "value": []}  # noqa: E501
         fields = helper._build_printable_fields(props)
+        販売行 = next(f for f in fields if "販売担当者" in f["name"])
+        assert 販売行["value"] == "2020"
+
+    def test_販売担当者と年式が両方空の場合は行なし(self, helper):
+        props = self._full_props()
+        props["販売担当者"] = {"type": "rollup", "value": []}  # noqa: E501
+        props["年式"] = {"type": "rich_text", "value": ""}
+        fields = helper._build_printable_fields(props)
         names = [f["name"] for f in fields]
-        assert "販売担当者" not in names
+        assert "販売担当者 / 年式" not in names
 
     def test_全フィールド空の場合は空リスト(self, helper):
         props = {
@@ -252,7 +262,7 @@ class TestLabelFieldsIntegration:
     実行: pytest -v -m integration tests/test_label_fields.py
     """
     PAGE_URL = "https://www.notion.so/4K-VIERA-36054e6206d881ffa92bf7af5123c15f"
-    EXPECTED_FIELDS = ["メーカー", "型番名 ", "仕入れ先名", "仕入れ日", "製番", "販売担当者"]
+    EXPECTED_FIELDS = ["メーカー", "型番名 ", "仕入れ先名", "仕入れ日", "ID", "製番", "販売担当者", "年式"]
 
     @pytest.fixture(autouse=True)
     def fetch_page(self):

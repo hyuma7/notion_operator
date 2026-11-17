@@ -29,7 +29,8 @@ class ExportTab:
 
         # State
         today = datetime.now()
-        self.pivot_start_date = datetime(2025, 6, 1) # Default
+        # 開始月は設定に永続化した値を使う（パース失敗時は 2026年6月 にフォールバック）
+        self.pivot_start_date = self._load_pivot_start_date()
         self.daily_start_date = today
         self.daily_end_date = today
         
@@ -40,6 +41,18 @@ class ExportTab:
 
         # UI Components
         self._build_ui()
+
+    def _load_pivot_start_date(self) -> datetime:
+        """設定の pivot_start_month（"YYYY-MM"）をパースして開始月の datetime を返す。
+
+        値が無い、または不正な場合は 2026年6月 にフォールバックする。
+        """
+        raw = self.proxy.config.get("pivot_start_month", "2026-06")
+        try:
+            year_str, month_str = str(raw).split("-")
+            return datetime(int(year_str), int(month_str), 1)
+        except (ValueError, AttributeError):
+            return datetime(2026, 6, 1)
 
     def _init_service(self):
         api_key = (self.proxy.config.get("notion_api_key", "") or "").strip()
@@ -190,6 +203,11 @@ class ExportTab:
         if e.control.value:
             self.pivot_start_date = e.control.value
             self.pivot_date_button.text = f"開始月: {self.pivot_start_date.year}年{self.pivot_start_date.month}月"
+            # 選択された年月を設定に永続化
+            year = self.pivot_start_date.year
+            month = self.pivot_start_date.month
+            self.proxy.config["pivot_start_month"] = f"{year}-{month:02d}"
+            self.proxy.save_config()
             self.page.update()
 
     def on_daily_start_change(self, e):

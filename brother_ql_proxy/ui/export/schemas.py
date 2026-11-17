@@ -12,10 +12,11 @@ class SoldRecord(NotionRecord):
     """Represents a sold item record"""
     product_name: str = Field(alias="商品名", default="")
     sales_amount: float = Field(alias="売上金", default=0)
-    profit: float = Field(alias="純利益", default=0)
+    profit: float = Field(alias="販売利益", default=0)
+    gross_profit: float = Field(alias="粗利", default=0)
     cost_price: float = Field(alias="仕入れ原価", default=0)
     commission: float = Field(alias="販売手数料", default=0)
-    shipping_cost: float = Field(alias="送料", default=0)
+    shipping_cost: float = Field(alias="配送料", default=0)
     
     sold_date: Optional[date] = Field(alias="売却日", default=None)
     sold_year_month: Optional[str] = None # Calculated field
@@ -29,7 +30,7 @@ class SoldRecord(NotionRecord):
     assignee: Optional[str] = Field(alias="作業担当", default=None)
     sales_assignee: Optional[str] = Field(alias="販売担当者", default=None)  # ロールアップ
 
-    @field_validator('sales_amount', 'profit', 'cost_price', 'commission', 'shipping_cost', mode='before')
+    @field_validator('sales_amount', 'profit', 'gross_profit', 'cost_price', 'commission', 'shipping_cost', mode='before')
     @classmethod
     def clean_currency(cls, v: Any) -> float:
         if v is None or v == "":
@@ -53,7 +54,12 @@ class SoldRecord(NotionRecord):
         if isinstance(v, str):
              # Remove URL part if exists: "Name (https://...)"
             value = re.sub(r'\s*\(https://.*?\)', '', v)
-            return value.strip()
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            if "," in value:
+                value = value.split(",")[0]
+            value = value.strip()
+            return value if value else "不明"
         return str(v).strip()
 
     @field_validator('supplier_category', 'sales_channel_category', mode='before')
@@ -63,6 +69,10 @@ class SoldRecord(NotionRecord):
             return "その他"
         # Notionから取得できた値をそのまま使用
         v_str = str(v).strip()
+        # relation の二重リンク等で複数値が ", " join された場合は先頭値のみ
+        # （例: "ネット, ネット" → "ネット"）
+        if "," in v_str:
+            v_str = v_str.split(",")[0].strip()
         return v_str if v_str else "その他"
 
 class PurchaseRecord(NotionRecord):
@@ -97,7 +107,12 @@ class PurchaseRecord(NotionRecord):
             return "不明"
         if isinstance(v, str):
             value = re.sub(r'\s*\(https://.*?\)', '', v)
-            return value.strip()
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            if "," in value:
+                value = value.split(",")[0]
+            value = value.strip()
+            return value if value else "不明"
         return str(v).strip()
 
     @field_validator('supplier_category', mode='before')
@@ -107,6 +122,10 @@ class PurchaseRecord(NotionRecord):
             return "その他"
         # Notionから取得できた値をそのまま使用
         v_str = str(v).strip()
+        # relation の二重リンク等で複数値が ", " join された場合は先頭値のみ
+        # （例: "ネット, ネット" → "ネット"）
+        if "," in v_str:
+            v_str = v_str.split(",")[0].strip()
         return v_str if v_str else "その他"
 
 
@@ -126,17 +145,18 @@ class DailySoldRecord(NotionRecord):
     cost_price: Optional[float] = Field(alias="仕入れ原価", default=None)
     trunk_line_fee: Optional[float] = Field(alias="幹線便料金", default=None)
     promotion: Optional[float] = Field(alias="プロモーション", default=None)
-    shipping_cost: float = Field(alias="送料", default=0)
-    shipping_method: str = Field(alias="送料計算方法", default="")
+    gross_profit: Optional[float] = Field(alias="粗利", default=None)
+    shipping_cost: float = Field(alias="配送料", default=0)
     commission: Optional[float] = Field(alias="販売手数料", default=None)
-    profit: Optional[float] = Field(alias="純利益", default=None)
+    profit: Optional[float] = Field(alias="販売利益", default=None)
     profit_rate: Optional[float] = Field(alias="利益率", default=None)
+    item_id: Optional[float] = Field(alias="商品ID", default=None)
     supplier: str = Field(alias="仕入れ先名", default="")
     purchase_date: Optional[date] = Field(alias="仕入れ日", default=None)
     sales_channel: str = Field(alias="販売媒体名", default="")
     assignee: str = Field(alias="作業担当", default="")
     slip_number: Optional[str] = Field(alias="伝票番号", default=None)
-    shipping_slip_number: Optional[float] = Field(alias="発送伝票番号", default=None)
+    shipping_slip_number: Optional[str] = Field(alias="発送伝票番号", default=None)
     buyer_name: Optional[str] = Field(alias="購入者名", default=None)
 
     @field_validator('sales_amount', 'purchase_cost', 'shipping_cost', mode='before')
@@ -154,7 +174,7 @@ class DailySoldRecord(NotionRecord):
                 return 0.0
         return 0.0
 
-    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', 'trunk_line_fee', 'promotion', mode='before')
+    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'trunk_line_fee', 'promotion', 'gross_profit', 'item_id', mode='before')
     @classmethod
     def clean_optional_number(cls, v: Any) -> Optional[float]:
         if v is None or v == "":
@@ -168,6 +188,28 @@ class DailySoldRecord(NotionRecord):
             except ValueError:
                 return None
         return None
+
+    @field_validator('shipping_slip_number', mode='before')
+    @classmethod
+    def clean_slip_number(cls, v: Any) -> Optional[str]:
+        """発送伝票番号は文字列で扱う（Notion側が数値型でも 123.0 → "123" に正規化）"""
+        if v is None or v == "":
+            return None
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        if isinstance(v, (int, float)):
+            return str(v)
+        v = str(v).strip()
+        return v or None
+
+    @field_validator('supplier', 'sales_channel', 'model_number', 'maker', mode='before')
+    @classmethod
+    def clean_relation_rollup(cls, v: Any) -> Any:
+        if isinstance(v, str) and "," in v:
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            v = v.split(",")[0].strip()
+        return v
 
 
 class DailyPurchaseRecord(NotionRecord):
@@ -221,3 +263,12 @@ class DailyPurchaseRecord(NotionRecord):
             except ValueError:
                 return None
         return None
+
+    @field_validator('supplier', 'supplier_category', 'model_number', 'maker', 'category', 'size', mode='before')
+    @classmethod
+    def clean_relation_rollup(cls, v: Any) -> Any:
+        if isinstance(v, str) and "," in v:
+            # relation の二重リンク等で rollup が複数値を ", " join した場合は
+            # 先頭の値のみを採用する（例: "RE, REO" → "RE"）
+            v = v.split(",")[0].strip()
+        return v

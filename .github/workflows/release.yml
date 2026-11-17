@@ -61,6 +61,12 @@ jobs:
             --hidden-import selenium.webdriver.support.expected_conditions \
             --hidden-import webdriver_manager.chrome \
             --hidden-import webdriver_manager.core.driver_cache \
+            --hidden-import brother_ql \
+            --hidden-import brother_ql.raster \
+            --hidden-import brother_ql.conversion \
+            --hidden-import brother_ql.backends \
+            --hidden-import brother_ql.backends.network \
+            --hidden-import packbits \
             -y
 
       - name: 配布用zipとチェックサムを作成 (macOS)

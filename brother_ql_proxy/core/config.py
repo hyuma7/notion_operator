@@ -101,6 +101,7 @@ DEFAULT_CONFIG = {
     "qr_size_scale": 3,
     "notion_api_key": "",
     "notion_database_id": "1d254e6206d881bb9e88d2e7ffb90444",
+    "pivot_start_month": "2026-06",
     "issuer_company_name": "株式会社 アーネスト",
     "issuer_representative": "代表取締役　齊藤 淳",
     "issuer_address": "〒225-0025 神奈川県横浜市青葉区鉄町25-8",
