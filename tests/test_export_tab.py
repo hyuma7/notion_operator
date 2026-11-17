@@ -302,6 +302,67 @@ class TestDailyExcelExport(unittest.TestCase):
             self.assertEqual(ws.cell(row=3, column=col).value, "0123-4567")
             self.assertIsNone(ws.cell(row=4, column=col).value)
 
+    def test_daily_excel_end_to_end_from_notion_pages(self):
+        """Notion API形式のページ → 取得 → 日別Excel出力 までを通しで検証する"""
+        from openpyxl import load_workbook
+
+        def text(v):
+            return {"type": "rich_text", "rich_text": [{"plain_text": v}] if v else []}
+
+        def num(v):
+            return {"type": "number", "number": v}
+
+        def page(pid, name, slip):
+            return {
+                "id": pid,
+                "created_time": "2026-11-17T00:00:00.000Z",
+                "properties": {
+                    "商品名": {"type": "title", "title": [{"plain_text": name}]},
+                    "在庫状況": {"type": "status", "status": {"name": "売却済み"}},
+                    "売却日": {"type": "date", "date": {"start": "2026-11-17"}},
+                    "売上金": num(50000),
+                    "配送料": num(3000),
+                    "販売利益": num(12000),
+                    # Notion 側に残っていても出力されないこと
+                    "送料計算方法": {"type": "select", "select": {"name": "ヤマト"}},
+                    "発送伝票番号": slip,
+                },
+            }
+
+        pages = [
+            page("p1", "数値型の伝票番号", num(123456789012)),
+            page("p2", "テキスト型・先頭0", text("012345678901")),
+            page("p3", "伝票番号なし", num(None)),
+        ]
+        service = ExportService(api_key="", database_id="")
+        service.notion = object()
+        service.database_id = "dummy"
+        with patch.object(service, "_query_with_retry",
+                          return_value={"results": pages, "has_more": False}):
+            sales = service.fetch_daily_sales_data("2026-11-17", "2026-11-18")
+        self.assertEqual(len(sales), 3)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "daily.xlsx")
+            service.generate_daily_excel(path, sales, [])
+            ws = load_workbook(path)["売上"]
+            headers = [c.value for c in ws[1]]
+            self.assertNotIn("送料計算方法", headers)
+            # 配送料の直後が純利益になっている（列が詰められている）
+            self.assertEqual(headers[headers.index("配送料") + 1], "純利益")
+
+            col = headers.index("発送伝票番号") + 1
+            values = [ws.cell(row=r, column=col).value for r in (2, 3, 4)]
+            self.assertEqual(values, ["123456789012", "012345678901", None])
+            for r in (2, 3):
+                self.assertEqual(ws.cell(row=r, column=col).data_type, "s")
+                self.assertEqual(ws.cell(row=r, column=col).number_format, "@")
+
+            # 他の数値列・合計行は従来どおり
+            sales_col = headers.index("売上金") + 1
+            self.assertEqual(ws.cell(row=2, column=sales_col).value, 50000)
+            self.assertEqual(ws.cell(row=5, column=1).value, "合計")
+
     def test_unique_file_path_adds_suffix(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             open(os.path.join(tmpdir, "日別売上_2026-06-01.xlsx"), "w").close()
