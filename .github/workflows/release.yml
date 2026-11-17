@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             key: macos-arm64
           - os: windows-latest
             key: windows-x64
