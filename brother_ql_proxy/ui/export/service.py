@@ -1094,16 +1094,17 @@ class ExportService:
             ("幹線便料金",     lambda r: r.trunk_line_fee),
             ("プロモーション", lambda r: r.promotion),
             ("配送料",         lambda r: r.shipping_cost),
-            ("送料計算方法",   lambda r: r.shipping_method),
             ("純利益",         lambda r: r.profit),
             ("商品ID",         lambda r: int(r.item_id) if r.item_id is not None else None),
-            ("発送伝票番号",   lambda r: int(r.shipping_slip_number) if r.shipping_slip_number is not None else None),
+            ("発送伝票番号",   lambda r: r.shipping_slip_number),
             ("購入者名",       lambda r: r.buyer_name),
         ]
         numeric_sales_cols = {
             "売上金", "仕入金", "仕入手数料", "仕入原価", "粗利",
             "販売手数料", "幹線便料金", "プロモーション", "配送料", "純利益",
         }
+        # 文字列として扱う列（Excel が数値化・指数表記しないようセル書式も文字列にする）
+        text_sales_cols = {"発送伝票番号"}
 
         # ヘッダー行
         for col_idx, (col_name, _) in enumerate(sales_columns, 1):
@@ -1119,6 +1120,8 @@ class ExportService:
                 cell = ws_sales.cell(row=row_idx, column=col_idx, value=value)
                 if col_name in numeric_sales_cols and value is not None:
                     cell.number_format = "#,##0"
+                elif col_name in text_sales_cols:
+                    cell.number_format = "@"
 
         # 合計行（SUBTOTAL: フィルタで絞り込んだ表示行だけを集計する）
         total_row = len(sales) + 2

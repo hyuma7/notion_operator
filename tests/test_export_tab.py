@@ -281,6 +281,27 @@ class TestDailyExcelExport(unittest.TestCase):
             "日別売上_2026-06-01_2026-06-30.xlsx",
         )
 
+    def test_daily_sales_sheet_slip_number_is_text_and_no_shipping_method(self):
+        """日別Excel: 送料計算方法列が無く、発送伝票番号は文字列セルで出力される"""
+        from openpyxl import load_workbook
+
+        sales = [
+            DailySoldRecord(**{"商品名": "A", "発送伝票番号": 123456789012.0}),
+            DailySoldRecord(**{"商品名": "B", "発送伝票番号": "0123-4567"}),
+            DailySoldRecord(**{"商品名": "C"}),
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "daily.xlsx")
+            ExportService(api_key="", database_id="").generate_daily_excel(path, sales, [])
+            ws = load_workbook(path)["売上"]
+            headers = [c.value for c in ws[1]]
+            self.assertNotIn("送料計算方法", headers)
+            col = headers.index("発送伝票番号") + 1
+            self.assertEqual(ws.cell(row=2, column=col).value, "123456789012")
+            self.assertEqual(ws.cell(row=2, column=col).number_format, "@")
+            self.assertEqual(ws.cell(row=3, column=col).value, "0123-4567")
+            self.assertIsNone(ws.cell(row=4, column=col).value)
+
     def test_unique_file_path_adds_suffix(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             open(os.path.join(tmpdir, "日別売上_2026-06-01.xlsx"), "w").close()

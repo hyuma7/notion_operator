@@ -147,7 +147,6 @@ class DailySoldRecord(NotionRecord):
     promotion: Optional[float] = Field(alias="プロモーション", default=None)
     gross_profit: Optional[float] = Field(alias="粗利", default=None)
     shipping_cost: float = Field(alias="配送料", default=0)
-    shipping_method: str = Field(alias="送料計算方法", default="")
     commission: Optional[float] = Field(alias="販売手数料", default=None)
     profit: Optional[float] = Field(alias="販売利益", default=None)
     profit_rate: Optional[float] = Field(alias="利益率", default=None)
@@ -157,7 +156,7 @@ class DailySoldRecord(NotionRecord):
     sales_channel: str = Field(alias="販売媒体名", default="")
     assignee: str = Field(alias="作業担当", default="")
     slip_number: Optional[str] = Field(alias="伝票番号", default=None)
-    shipping_slip_number: Optional[float] = Field(alias="発送伝票番号", default=None)
+    shipping_slip_number: Optional[str] = Field(alias="発送伝票番号", default=None)
     buyer_name: Optional[str] = Field(alias="購入者名", default=None)
 
     @field_validator('sales_amount', 'purchase_cost', 'shipping_cost', mode='before')
@@ -175,7 +174,7 @@ class DailySoldRecord(NotionRecord):
                 return 0.0
         return 0.0
 
-    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'shipping_slip_number', 'trunk_line_fee', 'promotion', 'gross_profit', 'item_id', mode='before')
+    @field_validator('purchase_fee', 'cost_price', 'commission', 'profit', 'profit_rate', 'trunk_line_fee', 'promotion', 'gross_profit', 'item_id', mode='before')
     @classmethod
     def clean_optional_number(cls, v: Any) -> Optional[float]:
         if v is None or v == "":
@@ -189,6 +188,19 @@ class DailySoldRecord(NotionRecord):
             except ValueError:
                 return None
         return None
+
+    @field_validator('shipping_slip_number', mode='before')
+    @classmethod
+    def clean_slip_number(cls, v: Any) -> Optional[str]:
+        """発送伝票番号は文字列で扱う（Notion側が数値型でも 123.0 → "123" に正規化）"""
+        if v is None or v == "":
+            return None
+        if isinstance(v, float) and v.is_integer():
+            return str(int(v))
+        if isinstance(v, (int, float)):
+            return str(v)
+        v = str(v).strip()
+        return v or None
 
     @field_validator('supplier', 'sales_channel', 'model_number', 'maker', mode='before')
     @classmethod
